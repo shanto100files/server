@@ -15,6 +15,7 @@ from providers.mlsbd import mlsbd
 from providers.hdhub4u import hdhub4u
 from providers.southfreak import southfreak
 from providers.bollyflix import bollyflix
+from providers.flixsearch import flixsearch
 from providers.domain_discovery import discover_deep
 from providers.domain_health import check_all_domains, get_all_status
 import providers.auto_resolver as auto_resolver
@@ -29,12 +30,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=200)
 
 _mem_cache = {}
-_mem_cache_ttl = 300
+_mem_cache_ttl = 600
 _mem_lock = threading.Lock()
-_mem_max = 500
+_mem_max = 1000
 
 _inflight = {}
 _inflight_lock = threading.Lock()
@@ -778,7 +779,7 @@ async def admin_providers(request: Request):
     
     provider_health = get_provider_health()
     providers = []
-    for name in ["CineFreak", "HDHub4U", "MLSBD", "SouthFreak", "BollyFlix"]:
+    for name in ["CineFreak", "HDHub4U", "MLSBD", "SouthFreak", "BollyFlix", "FlixSearch"]:
         h = provider_health.get(name, {})
         providers.append({
             "name": name,
@@ -812,6 +813,9 @@ async def admin_test_provider(request: Request, name: str = Query(...)):
         elif name == "HDHub4U":
             from providers.hdhub4u import hdhub4u
             result = await asyncio.get_event_loop().run_in_executor(executor, lambda: asyncio.run(hdhub4u("The Batman 2022")))
+        elif name == "FlixSearch":
+            from providers.flixsearch import flixsearch
+            result = await asyncio.get_event_loop().run_in_executor(executor, lambda: asyncio.run(flixsearch("The Batman 2022")))
         else:
             result = []
         elapsed = round(time.time() - start, 2)
@@ -1234,19 +1238,28 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
             ("MLSBD", lambda: mlsbd(title, tmdb_id)),
             ("SouthFreak", lambda: southfreak(title, tmdb_id)),
             ("BollyFlix", lambda: bollyflix(title, tmdb_id)),
+            ("FlixSearch", lambda: flixsearch(title, tmdb_id)),
         ]
 
         total = len(tasks)
+        provider_times = {}
 
         async def run_one(name, func):
             t0 = time.time()
             try:
                 result = await loop.run_in_executor(executor, func)
+                if not result:
+                    try:
+                        result = await loop.run_in_executor(executor, func)
+                    except Exception:
+                        pass
                 duration = time.time() - t0
+                provider_times[name] = round(duration, 2)
                 record_provider(name, bool(result), duration)
                 return name, result or []
             except Exception as e:
                 duration = time.time() - t0
+                provider_times[name] = round(duration, 2)
                 record_provider(name, False, duration)
                 return name, []
 
@@ -1280,7 +1293,7 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
                 chunks.append(chunk)
                 yield chunk
 
-        done_chunk = f"data: {_json.dumps({'type': 'done', 'total_sources': count})}\n\n"
+        done_chunk = f"data: {_json.dumps({'type': 'done', 'total_sources': count, 'provider_times': provider_times})}\n\n"
         chunks.append(done_chunk)
         yield done_chunk
 
@@ -1303,11 +1316,13 @@ if __name__ == "__main__":
     import uvicorn
 
     print("=" * 50)
-    print("  CinePix Server v3.0")
-    print("  Performance: OPTIMIZED")
-    print("  Workers: 30 threads")
-    print("  Connections: 100 concurrent")
-    print("  Memory Cache: 500 entries")
+    print("  CinePix Server v3.1")
+    print("  Performance: MAXIMUM POWER")
+    print("  Workers: 200 threads")
+    print("  Connections: 80 concurrent")
+    print("  Memory Cache: 1000 entries (10min TTL)")
     print("  Rate Limit: 30 req/min per IP")
+    print("  Providers: CineFreak, HDHub4U, MLSBD, SouthFreak, BollyFlix, FlixSearch")
+    print("  Retry: Auto-retry on empty results")
     print("=" * 50)
     uvicorn.run(app, host="0.0.0.0", port=8000)
