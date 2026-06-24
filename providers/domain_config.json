@@ -1,0 +1,134 @@
+{
+  "_doc": "Auto-updating domain config for link resolvers. Update this file when domains change.",
+  "_updated": "2026-06-24 20:02",
+  "gdflix": {
+    "domains": [
+      "new1.gdflix.io",
+      "gdflix.dev",
+      "gdflix.cc",
+      "gdflix.online",
+      "gdflix.top",
+      "gdflix.org",
+      "gdflix.cfd"
+    ],
+    "rewrite_map": {
+      "new.gdflix.com": "new1.gdflix.io",
+      "gdflix.top": "new1.gdflix.io",
+      "gdflix.org": "new1.gdflix.io",
+      "gdflix.cfd": "new1.gdflix.io",
+      "gdflix.dev": "new1.gdflix.io"
+    },
+    "resolution_methods": [
+      "key_post",
+      "drivebot",
+      "fastdl",
+      "instant",
+      "r2",
+      "pixeldrain",
+      "drive_google"
+    ],
+    "file_pattern": "/file/{id}",
+    "key_pattern": "\"key\"\\s*[,:]\\s*\"([^\"]+)\"",
+    "direct_post_data": {
+      "action": "direct",
+      "key": "{key}",
+      "action_token": ""
+    }
+  },
+  "hubcloud": {
+    "domains": [
+      "hubcloud.art",
+      "hubcloud.foo",
+      "hubcloud.ink",
+      "hubcloud.lol",
+      "hubcloud.vip",
+      "newhubcloud.com"
+    ],
+    "resolution_methods": [
+      "drivebot",
+      "fastdl",
+      "r2",
+      "pixeldrain",
+      "drive_google"
+    ],
+    "file_pattern": "/video/{id}"
+  },
+  "cinecloud": {
+    "domains": [
+      "cinecloud.net",
+      "cinecloud.xyz",
+      "cinecloud.to"
+    ],
+    "resolution_methods": [
+      "drivebot",
+      "fastdl",
+      "r2",
+      "pixeldrain"
+    ]
+  },
+  "link_protectors": {
+    "techzed.info": {
+      "pattern": "/view/{id}",
+      "contains": [
+        "gdflix",
+        "hubcloud",
+        "drivebot",
+        "fastdl"
+      ],
+      "needs_redirect": false
+    },
+    "fastdlserver.site": {
+      "pattern": "/?id={encoded}",
+      "contains": [
+        "gdflix",
+        "drivebot"
+      ],
+      "needs_redirect": true,
+      "follow_to": "gdflix"
+    },
+    "fxlinks.rest": {
+      "pattern": "/elinks/dex{id}/",
+      "contains": [
+        "fastdlserver",
+        "gdflix",
+        "drivebot"
+      ],
+      "needs_redirect": false
+    }
+  },
+  "file_hosts": {
+    "direct_streamable": [
+      "r2.dev",
+      "r2.cloudflarestorage.com",
+      "pub-*.r2.dev",
+      "pixeldrain.dev",
+      "pixeldrain.com",
+      "drive.google.com",
+      "*.workers.dev",
+      "*.pages.dev",
+      "blob.core.windows.net",
+      "mediafire.com",
+      "1fichier.com"
+    ],
+    "needs_resolution": [
+      "drivebot.sbs",
+      "drivebot.click",
+      "hubdrive.me",
+      "hubdrive.io",
+      "mega.nz",
+      "gofile.io",
+      "mixdrop.co",
+      "doodstream.com",
+      "streamtape.com"
+    ]
+  },
+  "alternative_search_sites": [
+    "southfreak.fyi",
+    "bollyflix.med",
+    "mlsbd.co",
+    "mlsbd.com",
+    "hdhub4u.miami",
+    "cinevexus.net",
+    "vegamovies.dev"
+  ]
+}

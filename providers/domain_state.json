@@ -1,0 +1,136 @@
+{
+  "gdflix": [
+    {
+      "domain": "new1.gdflix.io",
+      "status": 200,
+      "alive": true,
+      "response_time": 0.26,
+      "final_url": "https://new1.gdflix.io/",
+      "checked_at": 1782310697.6765442
+    },
+    {
+      "domain": "gdflix.dev",
+      "status": 200,
+      "alive": true,
+      "response_time": 0.28,
+      "final_url": "https://new1.gdflix.io/",
+      "checked_at": 1782310697.9576795
+    },
+    {
+      "domain": "gdflix.cc",
+      "status": 200,
+      "alive": true,
+      "response_time": 1.09,
+      "final_url": "https://gdflix.cc/",
+      "checked_at": 1782310699.048897
+    },
+    {
+      "domain": "gdflix.online",
+      "status": 0,
+      "alive": false,
+      "response_time": 0.07,
+      "error": "Failed to perform, curl: (6) Could not resolve host: gdflix.online. See https://curl.se/libcurl/c/li",
+      "checked_at": 1782310699.1212957
+    },
+    {
+      "domain": "gdflix.top",
+      "status": 0,
+      "alive": false,
+      "response_time": 2.67,
+      "error": "Failed to perform, curl: (6) Could not resolve host: gdflix.top. See https://curl.se/libcurl/c/libcu",
+      "checked_at": 1782310701.7890093
+    },
+    {
+      "domain": "gdflix.org",
+      "status": 0,
+      "alive": false,
+      "response_time": 0.27,
+      "error": "Failed to perform, curl: (6) Could not resolve host: gdflix.org. See https://curl.se/libcurl/c/libcu",
+      "checked_at": 1782310702.0637267
+    },
+    {
+      "domain": "gdflix.cfd",
+      "status": 0,
+      "alive": false,
+      "response_time": 0.11,
+      "error": "Failed to perform, curl: (6) Could not resolve host: gdflix.cfd. See https://curl.se/libcurl/c/libcu",
+      "checked_at": 1782310702.177967
+    }
+  ],
+  "hubcloud": [
+    {
+      "domain": "hubcloud.art",
+      "status": 200,
+      "alive": true,
+      "response_time": 1.18,
+      "final_url": "https://hubcloud.art/",
+      "checked_at": 1782310703.357804
+    },
+    {
+      "domain": "hubcloud.foo",
+      "status": 200,
+      "alive": true,
+      "response_time": 0.3,
+      "final_url": "https://hubcloud.foo/",
+      "checked_at": 1782310703.6564257
+    },
+    {
+      "domain": "hubcloud.ink",
+      "status": 200,
+      "alive": true,
+      "response_time": 2.98,
+      "final_url": "https://planet.news/",
+      "checked_at": 1782310706.6326208
+    },
+    {
+      "domain": "hubcloud.lol",
+      "status": 200,
+      "alive": true,
+      "response_time": 0.44,
+      "final_url": "https://hubcloud.foo/",
+      "checked_at": 1782310707.0691998
+    },
+    {
+      "domain": "hubcloud.vip",
+      "status": 0,
+      "alive": false,
+      "response_time": 0.13,
+      "error": "Failed to perform, curl: (6) Could not resolve host: hubcloud.vip. See https://curl.se/libcurl/c/lib",
+      "checked_at": 1782310707.1947231
+    },
+    {
+      "domain": "newhubcloud.com",
+      "status": 0,
+      "alive": false,
+      "response_time": 0.11,
+      "error": "Failed to perform, curl: (6) Could not resolve host: newhubcloud.com. See https://curl.se/libcurl/c/",
+      "checked_at": 1782310707.3087132
+    }
+  ],
+  "cinecloud": [
+    {
+      "domain": "cinecloud.net",
+      "status": 0,
+      "alive": false,
+      "response_time": 8.01,
+      "error": "Failed to perform, curl: (28) Connection timed out after 8009 milliseconds. See https://curl.se/libc",
+      "checked_at": 1782310715.319054
+    },
+    {
+      "domain": "cinecloud.xyz",
+      "status": 403,
+      "alive": false,
+      "response_time": 0.42,
+      "final_url": "https://cinecloud.xyz/",
+      "checked_at": 1782310715.7389104
+    },
+    {
+      "domain": "cinecloud.to",
+      "status": 0,
+      "alive": false,
+      "response_time": 0.07,
+      "error": "Failed to perform, curl: (6) Could not resolve host: cinecloud.to. See https://curl.se/libcurl/c/lib",
+      "checked_at": 1782310715.8120203
+    }
+  ]
+}
