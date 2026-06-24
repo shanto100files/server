@@ -29,7 +29,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
 
 _mem_cache = {}
 _mem_cache_ttl = 300
