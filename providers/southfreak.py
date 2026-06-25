@@ -66,9 +66,13 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
 
         resolved = resolve_any(href, quality=current_quality, referer=post_url)
         for r in resolved[:2]:
-            if r["url"] not in seen:
-                seen.add(r["url"])
-                sources.append(r)
+            url = r.get("url", "")
+            if url in seen:
+                continue
+            if not is_direct_streamable(url):
+                continue
+            seen.add(url)
+            sources.append(r)
 
     return sources
 

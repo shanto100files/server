@@ -22,6 +22,12 @@ CONFIG = _load_config()
 
 def is_direct_streamable(url: str) -> bool:
     SKIP = [".css", ".js", ".woff", ".woff2", ".ttf", ".eot", ".png", ".jpg", ".gif", ".svg", ".ico", ".webp", ".avif"]
+    WRAPPER_DOMAINS = [
+        "fastcdn-dl.pages.dev", "direct-dl.lol", "fastcdn.pages.dev",
+        "dl.flycors.dev", "fastdlserver.site", "linksmod.top",
+        "pixeldrain.dev", "filepress.click", "fsleech.com",
+        "drivebot.club", "gdflix.lol", "hubcloud.ink",
+    ]
     url_lower = url.lower()
     if any(url_lower.endswith(ext) or ext + "?" in url_lower for ext in SKIP):
         return False
@@ -30,6 +36,9 @@ def is_direct_streamable(url: str) -> bool:
     if "blogger.googleusercontent.com" in url_lower:
         return False
     host = (urlparse(url).hostname or "").lower()
+    for w in WRAPPER_DOMAINS:
+        if w in host:
+            return False
     hosts = CONFIG.get("file_hosts", {}).get("direct_streamable", [])
     for h in hosts:
         h_clean = h.lstrip("*.")
@@ -39,6 +48,35 @@ def is_direct_streamable(url: str) -> bool:
         elif h in host:
             return True
     if re.search(r'\.(mkv|mp4|m3u8|mpd)(?:\?|$)', url, re.IGNORECASE):
+        return True
+    if "r2.dev" in host or "r2.cloudflarestorage" in host:
+        return True
+    if "googleusercontent.com" in host and "video-downloads" not in host:
+        return True
+    if "pixeldrain.com" in host:
+        return True
+    return False
+
+
+def content_matches(url: str, title: str, year: str = "") -> bool:
+    if not title:
+        return True
+    title_words = set(re.sub(r'[^a-zA-Z0-9\s]', '', title.lower()).split())
+    title_words.discard('')
+    filename = unquote(url).lower()
+    filename_words = set(re.sub(r'[^a-zA-Z0-9\s]', ' ', filename).split())
+    overlap = title_words & filename_words
+    if len(overlap) >= max(1, len(title_words) - 2):
+        return True
+    if year and year in filename:
+        return True
+    if any(w in filename for w in title_words if len(w) > 3):
+        return True
+    if "r2.dev" in url or "r2.cloudflarestorage" in url:
+        return True
+    if "pixeldrain" in url:
+        return True
+    if "drive.google" in url:
         return True
     return False
 

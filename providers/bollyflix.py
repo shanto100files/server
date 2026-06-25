@@ -2,7 +2,7 @@ import re
 from bs4 import BeautifulSoup
 from client import cf_get
 from urllib.parse import urlparse
-from providers.auto_resolver import resolve_any, is_direct_streamable
+from providers.auto_resolver import resolve_any, is_direct_streamable, content_matches
 
 BASE = "https://bollyflix.med"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
@@ -72,9 +72,13 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
             break
         resolved = resolve_any(href, quality=quality, referer=post_url)
         for r in resolved[:2]:
-            if r["url"] not in seen:
-                seen.add(r["url"])
-                sources.append(r)
+            url = r.get("url", "")
+            if url in seen:
+                continue
+            if not is_direct_streamable(url):
+                continue
+            seen.add(url)
+            sources.append(r)
 
     return sources
 

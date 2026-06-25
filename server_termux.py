@@ -301,6 +301,10 @@ class CinePixHandler(BaseHTTPRequestHandler):
                 for s in (result or []):
                     url = s.get("url", "").split("?")[0].rstrip("/")
                     if url not in seen_urls:
+                        if not auto_resolver.is_direct_streamable(url):
+                            continue
+                        if not auto_resolver.content_matches(url, title):
+                            continue
                         seen_urls.add(url)
                         _enrich_source(s)
                         new_sources.append(s)
