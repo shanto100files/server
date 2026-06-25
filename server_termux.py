@@ -334,7 +334,9 @@ class CinePixHandler(BaseHTTPRequestHandler):
 
 
 def run_server():
-    init_db()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_db())
     print("=" * 50)
     print("  CinePix Server v3.1 Termux Edition")
     print("  No FastAPI, No Pydantic - Pure Python")

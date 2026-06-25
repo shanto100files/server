@@ -2,7 +2,11 @@ import aiosqlite
 import time
 import json
 import os
-import redis.asyncio as aioredis
+
+try:
+    import redis.asyncio as aioredis
+except ImportError:
+    aioredis = None
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "cache.db")
 
