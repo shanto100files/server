@@ -20,7 +20,8 @@ from providers.mlsbd import mlsbd
 from providers.hdhub4u import hdhub4u
 from providers.southfreak import southfreak
 from providers.bollyflix import bollyflix
-from providers.flixsearch import flixsearch
+from providers.vegamovies import vegamovies
+from providers.fourkhd import fourkhd
 from providers.domain_discovery import discover_deep
 from providers.domain_health import check_all_domains, get_all_status
 import providers.auto_resolver as auto_resolver
@@ -279,7 +280,8 @@ class CinePixHandler(BaseHTTPRequestHandler):
                 ("MLSBD", lambda: mlsbd(title, tmdb_id, season, episode, year, type_val)),
                 ("SouthFreak", lambda: southfreak(title, tmdb_id, year, type_val)),
                 ("BollyFlix", lambda: bollyflix(title, tmdb_id, year, type_val)),
-                ("FlixSearch", lambda: flixsearch(title, tmdb_id)),
+                ("VegaMovies", lambda: vegamovies(title, tmdb_id, season, episode, year, type_val)),
+                ("4KHDHub", lambda: fourkhd(title, tmdb_id)),
             ]
 
             seen_urls = set()
@@ -337,7 +339,7 @@ def run_server():
     print("  CinePix Server v3.1 Termux Edition")
     print("  No FastAPI, No Pydantic - Pure Python")
     print("  Port: 8000")
-    print("  Providers: 6")
+    print("  Providers: 7")
     print("=" * 50)
 
     server = HTTPServer(("0.0.0.0", 8000), CinePixHandler)
