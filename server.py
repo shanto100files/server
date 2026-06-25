@@ -18,6 +18,8 @@ from providers.mlsbd import mlsbd
 from providers.hdhub4u import hdhub4u
 from providers.southfreak import southfreak
 from providers.bollyflix import bollyflix
+from providers.vegamovies import vegamovies
+from providers.fourkhd import fourkhd
 from providers.flixsearch import flixsearch
 from providers.domain_discovery import discover_deep
 from providers.domain_health import check_all_domains, get_all_status
@@ -438,7 +440,7 @@ document.querySelectorAll('.p-chip').forEach(c=>{c.className='p-chip';});
 const meta=document.querySelector('.panel-meta');
 if(meta)meta.textContent=`Loading Season ${season} sources...`;
 
-const providers=['CineFreak','CineStream','HDHub4U','MLSBD','MovieLinkBD','CastleTV','VegaMovies'];
+const providers=['CineFreak','CineStream','HDHub4U','MLSBD','MovieLinkBD','CastleTV','VegaMovies','4KHD'];
 const row=document.getElementById('providersRow');
 if(row){
 row.innerHTML='';
@@ -562,7 +564,7 @@ _evtSource.onerror=function(){if(_evtSource){_evtSource.close();_evtSource=null;
 }
 
 function _addProviderChips(){
-const providers=['CineFreak','CineStream','HDHub4U','MLSBD','MovieLinkBD','CastleTV','VegaMovies'];
+const providers=['CineFreak','CineStream','HDHub4U','MLSBD','MovieLinkBD','CastleTV','VegaMovies','4KHD'];
 const row=document.getElementById('providersRow');
 providers.forEach(p=>{
 const c=document.createElement('span');
@@ -903,7 +905,7 @@ async def status():
         "inflight_requests": len(_inflight),
         "rate_limit_ips": len(_rate_limit),
         "provider_health": get_provider_health(),
-        "providers": ["CineFreak", "HDHub4U", "MLSBD", "MovieLinkBD", "VegaMovies", "CastleTV", "CineStream"],
+        "providers": ["CineFreak", "HDHub4U", "MLSBD", "MovieLinkBD", "VegaMovies", "CastleTV", "CineStream", "4KHD"],
     }
 
 @app.get("/clear")
@@ -1167,6 +1169,8 @@ async def sources(tmdb_id: str, type: str = "movie", title: str = "", season: in
         ("hdhub4u", lambda: hdhub4u(title, tmdb_id)),
         ("southfreak", lambda: southfreak(title, tmdb_id)),
         ("bollyflix", lambda: bollyflix(title, tmdb_id)),
+        ("vegamovies", lambda: vegamovies(title, tmdb_id, season, episode, year, type)),
+        ("4khdhub", lambda: fourkhd(title, tmdb_id)),
     ]
 
     async def run_provider(name, func):
@@ -1245,6 +1249,8 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
             ("MLSBD", lambda: mlsbd(title, tmdb_id, season, episode, year, type)),
             ("SouthFreak", lambda: southfreak(title, tmdb_id, year, type)),
             ("BollyFlix", lambda: bollyflix(title, tmdb_id, year, type)),
+            ("VegaMovies", lambda: vegamovies(title, tmdb_id, season, episode, year, type)),
+            ("4KHDHub", lambda: fourkhd(title, tmdb_id)),
         ]
 
         total = len(tasks)
