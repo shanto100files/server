@@ -106,7 +106,7 @@ def southfreak(title: str, tmdb_id: str = "", year: str = "", media_type: str = 
     scored = []
     for s in sources:
         sc = score_content(s.get("url", ""), title, year, media_type)
-        if sc >= 25:
+        if sc >= 15:
             s["relevance_score"] = sc
             scored.append(s)
     scored.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)

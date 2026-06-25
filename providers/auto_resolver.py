@@ -120,7 +120,7 @@ def score_content(filename: str, title: str, year: str = "", media_type: str = "
 
 def content_matches(url: str, title: str, year: str = "", media_type: str = "") -> bool:
     s = score_content(url, title, year, media_type)
-    return s >= 25
+    return s >= 15
 
 
 def _fetch_cffi(url: str, timeout: int = 10) -> tuple[str, str]:
