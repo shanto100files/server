@@ -1,8 +1,8 @@
 import re
 from bs4 import BeautifulSoup
 from client import cf_get
-from urllib.parse import urlparse
-from providers.auto_resolver import title_matches_search
+from urllib.parse import urlparse, urljoin
+from providers.auto_resolver import title_matches_search, resolve_any
 
 BOLLYFLIX_DOMAINS = ["https://bollyflix.med", "https://bollyflix.run"]
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
@@ -32,6 +32,32 @@ def _search(title: str) -> list[dict]:
     return []
 
 
+def _resolve_fxlinks(fx_url: str, quality: str = "HD") -> list[dict]:
+    html = cf_get(fx_url, headers={"Referer": fx_url, "User-Agent": UA}, timeout=10)
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "lxml")
+    sources = []
+    seen = set()
+    for a in soup.select("a[href]"):
+        href = a.get("href", "")
+        text = a.get_text(strip=True).lower()
+        if not href or href in seen:
+            continue
+        if "fxlinks" in href or "season" in text and "zip" in text:
+            continue
+        seen.add(href)
+        q_match = re.search(r"(2160p|1080p|720p|480p)", text + " " + href)
+        q = q_match.group(1) if q_match else quality
+        resolved = resolve_any(href, quality=q, referer=fx_url)
+        for r in resolved:
+            r["provider"] = "BollyFlix"
+        sources.extend(resolved)
+        if len(sources) >= 3:
+            break
+    return sources
+
+
 def _extract_links(html: str, post_url: str = "") -> list[dict]:
     soup = BeautifulSoup(html, "lxml")
     sources = []
@@ -58,6 +84,11 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
     for href, quality in all_download_links[:5]:
         if len(sources) >= 5:
             break
+        if "fxlinks.rest" in href:
+            fx_resolved = _resolve_fxlinks(href, quality)
+            if fx_resolved:
+                sources.extend(fx_resolved)
+                continue
         sources.append({
             "url": href,
             "quality": quality,
