@@ -146,7 +146,7 @@ async def shutdown():
     close_clients()
     executor.shutdown(wait=False)
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def dashboard():
     return r"""<!DOCTYPE html>
 <html lang="en">
