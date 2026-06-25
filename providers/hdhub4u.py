@@ -67,15 +67,21 @@ def _search_direct(title: str) -> str | None:
             if r.status_code != 200 or not r.text:
                 continue
             soup = BeautifulSoup(r.text, "lxml")
+            title_words = set(title.lower().split())
+            best_match = None
+            best_score = 0
             for a in soup.select("a[href]"):
                 href = a.get("href", "")
-                text = a.get_text(strip=True)
-                if domain in href and title.split()[0].lower() in text.lower():
-                    return href
-            for link in soup.find_all("a", href=True):
-                href = link["href"]
-                if domain in href and "/?s=" not in href and href not in [domain, f"{domain}/"]:
-                    return href
+                text = a.get_text(strip=True).lower()
+                if not href or "/?s=" in href or href.rstrip("/") == domain:
+                    continue
+                text_words = set(text.split())
+                overlap = len(title_words & text_words)
+                if overlap > best_score:
+                    best_score = overlap
+                    best_match = href
+            if best_match:
+                return best_match
         except:
             continue
     return None
