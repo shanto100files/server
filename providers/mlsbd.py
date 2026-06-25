@@ -2,6 +2,7 @@ import re
 from bs4 import BeautifulSoup
 from client import cf_get
 from providers.gdflix import resolve_gdflix, _is_streamable
+from providers.auto_resolver import resolve_any, is_direct_streamable, content_matches, title_matches_search, score_content
 
 MLSBD_DOMAINS = ["https://mlsbd.co", "https://mlsbd.com"]
 
@@ -56,7 +57,7 @@ def _extract_quality(text):
     m = re.search(r"(1080p|720p|480p|4K|2160p)", text, re.IGNORECASE)
     return m.group(1) if m else "HD"
 
-def mlsbd(title, tmdb_id="", season=0, episode=0):
+def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
     sources = []
     for domain in MLSBD_DOMAINS:
         html = _fetch(f"{domain}/?s={title}", headers={"Referer": domain})
@@ -67,10 +68,18 @@ def mlsbd(title, tmdb_id="", season=0, episode=0):
         post_url = None
         for a in soup.select("a[href]"):
             href = a.get("href", "")
-            text = a.get_text(strip=True).lower()
-            if domain in href and title.split()[0].lower() in text and href != f"{domain}/":
-                post_url = href
-                break
+            text = a.get_text(strip=True)
+            if domain in href and title.split()[0].lower() in text.lower() and href != f"{domain}/":
+                if title_matches_search(text, title, query_year=year):
+                    post_url = href
+                    break
+        if not post_url:
+            for a in soup.select("a[href]"):
+                href = a.get("href", "")
+                text = a.get_text(strip=True).lower()
+                if domain in href and title.split()[0].lower() in text and href != f"{domain}/":
+                    post_url = href
+                    break
         if not post_url:
             continue
 
@@ -165,4 +174,12 @@ def mlsbd(title, tmdb_id="", season=0, episode=0):
 
         if sources:
             break
-    return sources
+
+    scored = []
+    for s in sources:
+        sc = score_content(s.get("url", ""), title, year, media_type)
+        if sc >= 25:
+            s["relevance_score"] = sc
+            scored.append(s)
+    scored.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+    return scored[:8]

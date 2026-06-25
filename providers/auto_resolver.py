@@ -58,27 +58,69 @@ def is_direct_streamable(url: str) -> bool:
     return False
 
 
-def content_matches(url: str, title: str, year: str = "") -> bool:
-    if not title:
+def _normalize(text: str) -> str:
+    text = text.lower().strip()
+    text = re.sub(r'[^a-z0-9\s]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def title_matches_search(result_title: str, query_title: str, result_year: str = "", query_year: str = "") -> bool:
+    if not query_title or not result_title:
         return True
-    title_words = set(re.sub(r'[^a-zA-Z0-9\s]', '', title.lower()).split())
-    title_words.discard('')
-    filename = unquote(url).lower()
-    filename_words = set(re.sub(r'[^a-zA-Z0-9\s]', ' ', filename).split())
-    overlap = title_words & filename_words
-    if len(overlap) >= max(1, len(title_words) - 2):
+    rq = _normalize(query_title)
+    rr = _normalize(result_title)
+    if rq == rr:
         return True
-    if year and year in filename:
+    if rq in rr or rr in rq:
         return True
-    if any(w in filename for w in title_words if len(w) > 3):
+    qw = set(rq.split())
+    rw = set(rr.split())
+    qw.discard('')
+    rw.discard('')
+    overlap = qw & rw
+    if len(overlap) >= max(1, len(qw) - 1):
         return True
-    if "r2.dev" in url or "r2.cloudflarestorage" in url:
-        return True
-    if "pixeldrain" in url:
-        return True
-    if "drive.google" in url:
-        return True
+    if query_year and result_year and query_year != result_year:
+        return False
     return False
+
+
+def score_content(filename: str, title: str, year: str = "", media_type: str = "") -> int:
+    if not title:
+        return 50
+    score = 0
+    fn = _normalize(unquote(filename))
+    tn = _normalize(title)
+    tw = set(tn.split())
+    tw.discard('')
+    fw = set(fn.split())
+    fw.discard('')
+    overlap = tw & fw
+    if tw:
+        match_ratio = len(overlap) / len(tw)
+        score += int(match_ratio * 60)
+    if year and year in fn:
+        score += 15
+    if media_type:
+        mt = media_type.lower()
+        if mt == "movie" and any(w in fn for w in ["bluray", "web-dl", "webdl", "hdrip", "dvdrip", "hdtv"]):
+            score += 10
+        elif mt == "tv" and any(w in fn for w in ["s01", "s02", "s03", "s04", "s05", "season", "episode", "ep0", "ep1", "ep2"]):
+            score += 10
+    bad_signals = ["trailer", "teaser", "clip", "behind the scenes", "interview", "making of"]
+    if any(b in fn for b in bad_signals):
+        score -= 30
+    if len(tw) >= 2 and len(overlap) < 2:
+        score -= 20
+    if tw and not overlap:
+        score = max(score - 40, 0)
+    return max(0, min(100, score))
+
+
+def content_matches(url: str, title: str, year: str = "", media_type: str = "") -> bool:
+    s = score_content(url, title, year, media_type)
+    return s >= 25
 
 
 def _fetch_cffi(url: str, timeout: int = 10) -> tuple[str, str]:

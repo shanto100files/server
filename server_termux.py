@@ -269,15 +269,16 @@ class CinePixHandler(BaseHTTPRequestHandler):
             title = params.get("title", [""])[0]
             season = int(params.get("season", ["0"])[0])
             episode = int(params.get("episode", ["0"])[0])
+            year = params.get("year", [""])[0]
 
             self._send_sse_headers()
 
             providers_list = [
                 ("CineFreak", lambda: cinefreak(tmdb_id, type_val, title, season, episode)),
                 ("HDHub4U", lambda: hdhub4u(title, tmdb_id)),
-                ("MLSBD", lambda: mlsbd(title, tmdb_id)),
-                ("SouthFreak", lambda: southfreak(title, tmdb_id)),
-                ("BollyFlix", lambda: bollyflix(title, tmdb_id)),
+                ("MLSBD", lambda: mlsbd(title, tmdb_id, season, episode, year, type_val)),
+                ("SouthFreak", lambda: southfreak(title, tmdb_id, year, type_val)),
+                ("BollyFlix", lambda: bollyflix(title, tmdb_id, year, type_val)),
                 ("FlixSearch", lambda: flixsearch(title, tmdb_id)),
             ]
 

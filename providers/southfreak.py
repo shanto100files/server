@@ -2,7 +2,7 @@ import re
 from bs4 import BeautifulSoup
 from client import cf_get
 from curl_cffi import requests as cffi_requests
-from providers.auto_resolver import resolve_any, resolve_protector_auto, is_direct_streamable
+from providers.auto_resolver import resolve_any, resolve_protector_auto, is_direct_streamable, title_matches_search, score_content
 
 BASE = "https://southfreak.fyi"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
@@ -77,29 +77,37 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
     return sources
 
 
-def southfreak(title: str, tmdb_id: str = "") -> list[dict]:
+def southfreak(title: str, tmdb_id: str = "", year: str = "", media_type: str = "") -> list[dict]:
     results = _search(title)
     if not results:
         return []
 
     best = None
-    title_lower = title.lower().strip()
     for r in results:
-        rt = r["title"].lower()
-        if title_lower in rt or rt in title_lower:
-            best = r
-            break
-        words = set(title_lower.split())
-        rwords = set(rt.split())
-        if len(words & rwords) >= max(1, len(words) - 1):
+        if title_matches_search(r["title"], title, query_year=year):
             best = r
             break
     if not best:
-        best = results[0]
+        for r in results:
+            rt = r["title"].lower()
+            tw = set(title.lower().split())
+            rw = set(rt.split())
+            if len(tw & rw) >= max(1, len(tw) - 1):
+                best = r
+                break
+    if not best:
+        return []
 
     html = cf_get(best["url"], headers={"Referer": BASE, "User-Agent": UA}, timeout=15)
     if not html:
         return []
 
     sources = _extract_links(html, post_url=best["url"])
-    return sources
+    scored = []
+    for s in sources:
+        sc = score_content(s.get("url", ""), title, year, media_type)
+        if sc >= 25:
+            s["relevance_score"] = sc
+            scored.append(s)
+    scored.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+    return scored[:8]
