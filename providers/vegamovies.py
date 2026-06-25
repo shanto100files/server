@@ -1,83 +1,141 @@
-import re
+import re, json, base64
+from urllib.parse import unquote
 from bs4 import BeautifulSoup
 from client import cf_get
 
-VEGAMOVIES_DOMAINS = ["https://vegamovie.sl", "https://vegamovies.tel", "https://vegamovies.com"]
+VEGAMOVIES_DOMAINS = ["https://vegamovies.mq", "https://vegamovies.market", "https://vegamovies.tel", "https://vegamovie.sl"]
+DYNAMIC_URLS = "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
 
-def _fetch(url: str, headers: dict = None) -> str | None:
-    return cf_get(url, headers=headers, timeout=10)
+def _fetch(url, timeout=12):
+    return cf_get(url, headers={"Referer": "https://vegamovies.mq"}, timeout=timeout)
 
-def _extract_quality(text: str) -> str:
-    m = re.search(r"(1080p|720p|480p|4K|2160p)", text, re.IGNORECASE)
-    return m.group(1) if m else "HD"
+def _get_domain():
+    try:
+        r = cf_get(DYNAMIC_URLS, timeout=8)
+        if r:
+            data = json.loads(r)
+            return data.get("vegamovies", VEGAMOVIES_DOMAINS[0])
+    except:
+        pass
+    return VEGAMOVIES_DOMAINS[0]
 
-def _extract_size(text: str) -> str:
-    m = re.search(r"([\d.]+\s*(?:GB|MB|KB))", text, re.IGNORECASE)
-    return m.group(1) if m else ""
-
-def vegamovies(title: str, tmdb_id: str = "") -> list[dict]:
-    sources = []
-
-    for domain in VEGAMOVIES_DOMAINS:
-        html = _fetch(f"{domain}/?s={title}", headers={"Referer": domain})
-        if not html:
-            continue
-
-        soup = BeautifulSoup(html, "lxml")
-        posts = soup.select("article a, .post-title a, h2 a, h3 a")
-        if not posts:
-            continue
-
-        post_url = None
-        for p in posts:
-            href = p.get("href", "")
-            text = p.get_text(strip=True).lower()
-            if href and title.split()[0].lower() in text and domain in href:
-                post_url = href
-                break
-        if not post_url:
-            post_url = posts[0].get("href", "")
-        if not post_url:
-            continue
-
-        post_html = _fetch(post_url, headers={"Referer": domain})
-        if not post_html:
-            continue
-
-        post_soup = BeautifulSoup(post_html, "lxml")
-
-        for a in post_soup.select("a[href]"):
-            href = a.get("href", "")
-            text = a.get_text(strip=True)
-            if not href:
+def _resolve_vcloud(url):
+    html = _fetch(url, timeout=10)
+    if not html:
+        return []
+    m = re.search(r'var\s+url\s*=\s*atob\(atob\(["\']([^"\']+)["\']\)\)', html)
+    if not m:
+        return []
+    b64 = m.group(1)
+    while len(b64) % 4 != 0:
+        b64 += "="
+    try:
+        once = base64.b64decode(b64).decode()
+        while len(once) % 4 != 0:
+            once += "="
+        token_url = base64.b64decode(once).decode()
+    except:
+        return []
+    token_html = _fetch(token_url, timeout=10)
+    if not token_html:
+        return []
+    results = []
+    soup = BeautifulSoup(token_html, "lxml")
+    for h2 in soup.find_all("h2"):
+        for a in h2.find_all_next("a", href=True):
+            h = a["href"]
+            t = a.get_text(strip=True)
+            if not h.startswith("http"):
                 continue
-
-            if any(x in href for x in ["nexdrive", "fast-dl", "savelinks", "gdflix", "hubdrive", "hubcloud", "pixeldrain", "filepress"]):
-                quality = _extract_quality(text)
-                size = _extract_size(text)
-                fmt = "mkv" if "mkv" in text.lower() else "mp4"
-                source = {
-                    "url": href,
-                    "quality": quality,
-                    "provider": "VegaMovies",
-                    "format": fmt,
-                }
-                if size:
-                    source["fileSize"] = size
-                sources.append(source)
-
-        for btn in post_soup.select("button[data-src], a[data-src]"):
-            href = btn.get("data-src", "")
-            if href:
-                quality = _extract_quality(btn.text)
-                sources.append({
-                    "url": href,
-                    "quality": quality,
-                    "provider": "VegaMovies",
-                    "format": "mp4",
-                })
-
-        if sources:
+            if any(x in h for x in [".css", ".js", "fonts", "favicon"]):
+                continue
+            quality = "HD"
+            combined = t + " " + unquote(h)
+            for q in ["2160p", "4K", "1080p", "720p", "480p"]:
+                if q.lower() in combined.lower():
+                    quality = q
+                    break
+            if "FSLv2" in t or "FSL" in t or "10Gbps" in t or "Mega" in t or "Buzz" in t or "Pixeldrain" in t:
+                results.append({"url": h, "quality": quality})
+                if len(results) >= 6:
+                    break
+        if results:
             break
+    return results
 
-    return sources
+def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
+    domain = _get_domain()
+    html = _fetch(f"{domain}/search.php?q={title}&page=1", timeout=10)
+    if not html:
+        return []
+    try:
+        data = json.loads(html)
+    except:
+        return []
+    hits = data.get("hits", [])
+    if not hits:
+        return []
+    post_url = None
+    qw = set(title.lower().split())
+    for hit in hits:
+        doc = hit.get("document", {})
+        permalink = doc.get("permalink", "")
+        post_title = doc.get("post_title", "")
+        if not permalink:
+            continue
+        pt_lower = post_title.lower()
+        tw = set(pt_lower.split())
+        overlap = qw & tw
+        if not overlap:
+            continue
+        precision = len(overlap) / len(qw) if qw else 0
+        if precision < 0.5:
+            continue
+        if year and year not in post_title:
+            continue
+        post_url = domain + permalink
+        break
+    if not post_url:
+        return []
+    post_html = _fetch(post_url, timeout=12)
+    if not post_html:
+        return []
+    soup = BeautifulSoup(post_html, "lxml")
+    final = []
+    seen = set()
+    for a in soup.find_all("a", href=True):
+        h = a["href"]
+        t = a.get_text(strip=True)
+        if not h or "#" in h or not h.startswith("http"):
+            continue
+        if "nexdrive" not in h:
+            continue
+        nex_html = _fetch(h, timeout=10)
+        if not nex_html:
+            continue
+        vcloud_url = None
+        for m in re.finditer(r'href="(https?://vcloud\.zip/[^"]*)"', nex_html):
+            vcloud_url = m.group(1)
+            break
+        if not vcloud_url:
+            for m in re.finditer(r'href="(https?://[^"]*(?:hubcloud|vcloud)[^"]*)"', nex_html):
+                hh = m.group(1)
+                if "signup" not in hh and "tg/" not in hh and "bit.ly" not in hh:
+                    vcloud_url = hh
+                    break
+        if not vcloud_url:
+            continue
+        resolved = _resolve_vcloud(vcloud_url)
+        for r in resolved:
+            url = r["url"]
+            if url in seen:
+                continue
+            seen.add(url)
+            quality = r.get("quality", "HD")
+            for q in ["2160p", "4K", "1080p", "720p", "480p"]:
+                if q.lower() in url.lower():
+                    quality = q
+                    break
+            fmt = "mkv" if ".mkv" in url else "mp4"
+            final.append({"url": url, "quality": quality, "provider": "VegaMovies", "format": fmt})
+    return final[:10]
