@@ -1,7 +1,7 @@
 import re
-import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin
+from client import cf_get
 from providers.hubcloud import extract_hubcloud
 from providers.gdflix import resolve_gdflix
 
@@ -9,9 +9,10 @@ BASE = "https://www.animedubhindi.cc"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 def _soup(url):
-    r = requests.get(url, headers={"User-Agent": UA}, timeout=20)
-    r.raise_for_status()
-    return BeautifulSoup(r.text, "lxml")
+    html = cf_get(url, headers={"Referer": BASE, "User-Agent": UA}, timeout=20)
+    if not html:
+        raise Exception(f"Failed to fetch {url}")
+    return BeautifulSoup(html, "lxml")
 
 def search(query):
     try:
