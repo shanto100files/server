@@ -1244,19 +1244,23 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
         chunks = []
 
         tasks = [
-            ("CineFreak", lambda: cinefreak(tmdb_id, type, title, season, episode)),
             ("HDHub4U", lambda: hdhub4u(title, tmdb_id)),
+            ("4KHDHub", lambda: fourkhd(title, tmdb_id)),
+            ("CineFreak", lambda: cinefreak(tmdb_id, type, title, season, episode)),
             ("MLSBD", lambda: mlsbd(title, tmdb_id, season, episode, year, type)),
             ("SouthFreak", lambda: southfreak(title, tmdb_id, year, type)),
             ("BollyFlix", lambda: bollyflix(title, tmdb_id, year, type)),
             ("VegaMovies", lambda: vegamovies(title, tmdb_id, season, episode, year, type)),
-            ("4KHDHub", lambda: fourkhd(title, tmdb_id)),
         ]
 
         total = len(tasks)
         provider_times = {}
+        enough = False
 
         async def run_one(name, func):
+            nonlocal enough
+            if enough:
+                return name, []
             t0 = time.time()
             try:
                 async with _provider_semaphore:
@@ -1296,6 +1300,9 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
                         _enrich_source(s)
                         new_sources.append(s)
                         count += 1
+
+                if count >= 15:
+                    enough = True
 
                 chunk = f"data: {_json.dumps({'type': 'provider_done', 'name': name, 'sources': new_sources, 'count': len(new_sources), 'done': done_count, 'total': total})}\n\n"
                 chunks.append(chunk)

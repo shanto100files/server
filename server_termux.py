@@ -9,6 +9,7 @@ import time
 import threading
 import re
 import os
+import queue
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -26,7 +27,8 @@ from providers.domain_discovery import discover_deep
 from providers.domain_health import check_all_domains, get_all_status
 import providers.auto_resolver as auto_resolver
 
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=50)
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+_provider_semaphore = threading.Semaphore(3)
 
 _mem_cache = {}
 _mem_cache_ttl = 600
@@ -274,56 +276,124 @@ class CinePixHandler(BaseHTTPRequestHandler):
 
             self._send_sse_headers()
 
-            providers_list = [
-                ("CineFreak", lambda: cinefreak(tmdb_id, type_val, title, season, episode)),
+            cache_key = f"stream:{tmdb_id}:{type_val}:{title}:{season}:{episode}:{year}"
+            cached = mem_cache_get(cache_key)
+            if cached:
+                for chunk in cached:
+                    self.wfile.write(f"data: {chunk}\n\n".encode())
+                self.wfile.flush()
+                return
+
+            inflight_key = cache_key
+            existing = get_inflight(inflight_key)
+            if existing:
+                while True:
+                    chunk = existing.get()
+                    if chunk is None:
+                        break
+                    self.wfile.write(f"data: {chunk}\n\n".encode())
+                self.wfile.flush()
+                return
+
+            room_queue = queue.Queue()
+            set_inflight(inflight_key, room_queue)
+
+            providers_fast = [
                 ("HDHub4U", lambda: hdhub4u(title, tmdb_id)),
+                ("4KHDHub", lambda: fourkhd(title, tmdb_id)),
+                ("CineFreak", lambda: cinefreak(tmdb_id, type_val, title, season, episode)),
+            ]
+            providers_slow = [
                 ("MLSBD", lambda: mlsbd(title, tmdb_id, season, episode, year, type_val)),
                 ("SouthFreak", lambda: southfreak(title, tmdb_id, year, type_val)),
                 ("BollyFlix", lambda: bollyflix(title, tmdb_id, year, type_val)),
                 ("VegaMovies", lambda: vegamovies(title, tmdb_id, season, episode, year, type_val)),
-                ("4KHDHub", lambda: fourkhd(title, tmdb_id)),
             ]
 
             seen_urls = set()
-            count = 0
+            count = [0]
+            done_count = [0]
+            total = len(providers_fast) + len(providers_slow)
+            all_chunks = []
+            lock = threading.Lock()
+            enough = threading.Event()
 
-            for name, func in providers_list:
+            def run_provider(name, func):
+                if enough.is_set():
+                    return
                 start_msg = json.dumps({"type": "provider_start", "name": name})
-                self.wfile.write(f"data: {start_msg}\n\n".encode())
-                self.wfile.flush()
+                with lock:
+                    room_queue.put(start_msg)
+                    all_chunks.append(start_msg)
 
                 t0 = time.time()
                 try:
-                    result = func()
+                    with _provider_semaphore:
+                        result = func()
                 except Exception:
                     result = []
                 duration = time.time() - t0
                 record_provider(name, bool(result), duration)
 
                 new_sources = []
-                for s in (result or []):
-                    url = s.get("url", "").split("?")[0].rstrip("/")
-                    if url not in seen_urls:
-                        if not auto_resolver.is_direct_streamable(url):
-                            continue
-                        if not auto_resolver.content_matches(url, title):
-                            continue
-                        seen_urls.add(url)
-                        _enrich_source(s)
-                        new_sources.append(s)
-                        count += 1
+                with lock:
+                    for s in (result or []):
+                        url = s.get("url", "").split("?")[0].rstrip("/")
+                        if url not in seen_urls:
+                            if not auto_resolver.is_direct_streamable(url):
+                                continue
+                            if not auto_resolver.content_matches(url, title):
+                                continue
+                            seen_urls.add(url)
+                            _enrich_source(s)
+                            new_sources.append(s)
+                            count[0] += 1
+
+                    done_count[0] += 1
+                    if count[0] >= 15:
+                        enough.set()
 
                 done_msg = json.dumps({
                     "type": "provider_done", "name": name, "sources": new_sources,
-                    "count": len(new_sources), "done": providers_list.index((name, func)) + 1,
-                    "total": len(providers_list)
+                    "count": len(new_sources), "done": done_count[0], "total": total
                 })
-                self.wfile.write(f"data: {done_msg}\n\n".encode())
-                self.wfile.flush()
+                with lock:
+                    room_queue.put(done_msg)
+                    all_chunks.append(done_msg)
 
-            done_msg = json.dumps({"type": "done", "total_sources": count})
-            self.wfile.write(f"data: {done_msg}\n\n".encode())
+            for name, func in providers_fast:
+                t = threading.Thread(target=run_provider, args=(name, func), daemon=True)
+                t.start()
+
+            for name, func in providers_slow:
+                t = threading.Thread(target=run_provider, args=(name, func), daemon=True)
+                t.start()
+
+            waited = 0
+            while done_count[0] < total and waited < 120:
+                try:
+                    chunk = room_queue.get(timeout=0.5)
+                    self.wfile.write(f"data: {chunk}\n\n".encode())
+                    self.wfile.flush()
+                except queue.Empty:
+                    waited += 0.5
+                    if enough.is_set() and done_count[0] >= len(providers_fast):
+                        break
+
+            while not room_queue.empty():
+                try:
+                    chunk = room_queue.get_nowait()
+                    self.wfile.write(f"data: {chunk}\n\n".encode())
+                except queue.Empty:
+                    break
             self.wfile.flush()
+
+            done_final = json.dumps({"type": "done", "total_sources": count[0]})
+            self.wfile.write(f"data: {done_final}\n\n".encode())
+            self.wfile.flush()
+
+            remove_inflight(inflight_key)
+            mem_cache_set(cache_key, all_chunks)
             return
 
         if path == "/api/admin/domains":
@@ -338,10 +408,11 @@ def run_server():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(init_db())
     print("=" * 50)
-    print("  CinePix Server v3.1 Termux Edition")
-    print("  No FastAPI, No Pydantic - Pure Python")
-    print("  Port: 8000")
-    print("  Providers: 7")
+    print("  CinePix Server v3.2 Termux Edition")
+    print("  Multi-Room | Concurrent Providers")
+    print("  Port: 8000 | Providers: 7")
+    print("  Fast: HDHub4U, 4KHDHub, CineFreak")
+    print("  Slow: MLSBD, SouthFreak, BollyFlix, VegaMovies")
     print("=" * 50)
 
     server = HTTPServer(("0.0.0.0", 8000), CinePixHandler)
