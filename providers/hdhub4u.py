@@ -41,7 +41,7 @@ def _search(title: str) -> str | None:
     try:
         r = cffi_requests.get(HDHUB4U_SEARCH_API, params=params, impersonate="chrome",
                                headers={"Referer": "https://new2.hdhub4u.limo/", "Origin": "https://new2.hdhub4u.limo"},
-                               timeout=15)
+                               timeout=10)
         if r.status_code == 200:
             data = r.json()
             hits = data.get("hits", [])
@@ -57,16 +57,40 @@ def _search(title: str) -> str | None:
     return None
 
 
+def _search_direct(title: str) -> str | None:
+    for domain in HDHUB4U_DOMAINS:
+        try:
+            url = f"{domain}/?s={title}"
+            r = cffi_requests.get(url, impersonate="chrome",
+                                   headers={"User-Agent": _UA, "Referer": domain},
+                                   timeout=10)
+            if r.status_code != 200 or not r.text:
+                continue
+            soup = BeautifulSoup(r.text, "lxml")
+            for a in soup.select("a[href]"):
+                href = a.get("href", "")
+                text = a.get_text(strip=True)
+                if domain in href and title.split()[0].lower() in text.lower():
+                    return href
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
+                if domain in href and "/?s=" not in href and href not in [domain, f"{domain}/"]:
+                    return href
+        except:
+            continue
+    return None
+
+
 def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
     sources = []
 
-    permalink = _search(title)
+    permalink = _search(title) or _search_direct(title)
     if not permalink:
         return sources
 
     post_url = None
     for domain in HDHUB4U_DOMAINS:
-        test_url = f"{domain}{permalink}"
+        test_url = f"{domain}{permalink}" if permalink.startswith("/") else permalink
         try:
             r = cffi_requests.get(test_url, impersonate="chrome", timeout=10)
             if r.status_code == 200 and len(r.text) > 1000:
@@ -78,7 +102,7 @@ def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
     if not post_url:
         return sources
 
-    post_html = cf_get(post_url, timeout=15)
+    post_html = cf_get(post_url, timeout=10)
     if not post_html:
         return sources
 
@@ -137,6 +161,13 @@ def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
                     "provider": "HDHub4U",
                     "format": "mkv" if "mkv" in text.lower() else "mp4",
                 })
+        elif "gadgetsweb.xyz" in href:
+            sources.append({
+                "url": href,
+                "quality": quality,
+                "provider": "HDHub4U",
+                "format": "mp4",
+            })
 
     for btn in soup.select("button[data-src], a[data-src]"):
         href = btn.get("data-src", "")

@@ -79,7 +79,7 @@ async def cache_set(key: str, data: dict, provider: str):
     ttl = PROVIDER_TTL.get(provider, 4 * 3600)
     if _use_redis and _redis:
         try:
-            await _redis.setex("cache:" + key, ttl, json.dumps(data))
+            await _redis.set("cache:" + key, json.dumps(data), ex=ttl)
             return
         except Exception:
             pass

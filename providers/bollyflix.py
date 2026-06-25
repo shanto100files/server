@@ -2,34 +2,34 @@ import re
 from bs4 import BeautifulSoup
 from client import cf_get
 from urllib.parse import urlparse
-from providers.auto_resolver import resolve_any, is_direct_streamable, content_matches, title_matches_search, score_content
+from providers.auto_resolver import title_matches_search
 
-BASE = "https://bollyflix.med"
+BOLLYFLIX_DOMAINS = ["https://bollyflix.med", "https://bollyflix.run"]
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
 
 
 def _search(title: str) -> list[dict]:
-    url = f"{BASE}/?s={title}"
-    html = cf_get(url, headers={"Referer": BASE, "User-Agent": UA}, timeout=15)
-    if not html:
-        return []
-
-    soup = BeautifulSoup(html, "lxml")
-    results = []
-    for article in soup.select("article"):
-        a = article.select_one("a[href]")
-        img = article.select_one("img")
-        title_el = article.select_one("h2.title a, h2.entry-title a, .front-view-title a")
-        if not a or not title_el:
+    for BASE in BOLLYFLIX_DOMAINS:
+        url = f"{BASE}/?s={title}"
+        html = cf_get(url, headers={"Referer": BASE, "User-Agent": UA}, timeout=10)
+        if not html:
             continue
-        href = a.get("href", "")
-        name = title_el.get_text(strip=True)
-        poster = ""
-        if img:
-            poster = img.get("src", "") or img.get("data-src", "")
-        if href and name:
+
+        soup = BeautifulSoup(html, "lxml")
+        results = []
+
+        for a in soup.select("article a[href], .post a[href], a.post-image"):
+            href = a.get("href", "")
+            name = a.get("title", "") or a.get_text(strip=True)
+            if not href or not name:
+                continue
+            img = a.select_one("img")
+            poster = img.get("src", "") or img.get("data-src", "") if img else ""
             results.append({"url": href, "title": name, "poster": poster})
-    return results
+
+        if results:
+            return results
+    return []
 
 
 def _extract_links(html: str, post_url: str = "") -> list[dict]:
@@ -39,27 +39,15 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
 
     all_download_links = []
 
-    for a in soup.select("a.maxbutton, a.button-download-links"):
-        href = a.get("href", "")
-        text = a.get_text(strip=True)
-        if not href or href in seen:
-            continue
-        seen.add(href)
-        quality = "HD"
-        q_match = re.search(r"(2160p|1080p|720p|480p)", text + " " + href)
-        if q_match:
-            quality = q_match.group(1)
-        all_download_links.append((href, quality))
-
     for a in soup.select("a[href]"):
         href = a.get("href", "")
         text = a.get_text(strip=True)
         if not href or href in seen:
             continue
         host = (urlparse(href).hostname or "").lower()
-        is_dl = any(x in href for x in ["linksmod", "fastdlserver", "fxlinks", "techzed", "hubcloud", "hubdrive", "gdflix", "neodrive", "drive"]) or \
-                any(x in text.lower() for x in ["download", "1080p", "720p", "480p", "google drive"])
-        if is_dl:
+        is_dl = any(x in href for x in ["linksmod", "fastdlserver", "fxlinks", "techzed", "hubcloud", "hubdrive", "gdflix", "neodrive", "gadgetsweb"]) or \
+                any(x in href for x in ["drive.google.com", "pixeldrain", "r2.dev", "mega.nz"])
+        if is_dl and "bollyflix" not in host and "how-to-download" not in href:
             seen.add(href)
             quality = "HD"
             q_match = re.search(r"(2160p|1080p|720p|480p)", text + " " + href)
@@ -67,18 +55,15 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
                 quality = q_match.group(1)
             all_download_links.append((href, quality))
 
-    for href, quality in all_download_links[:8]:
-        if len(sources) >= 8:
+    for href, quality in all_download_links[:5]:
+        if len(sources) >= 5:
             break
-        resolved = resolve_any(href, quality=quality, referer=post_url)
-        for r in resolved[:2]:
-            url = r.get("url", "")
-            if url in seen:
-                continue
-            if not is_direct_streamable(url):
-                continue
-            seen.add(url)
-            sources.append(r)
+        sources.append({
+            "url": href,
+            "quality": quality,
+            "provider": "BollyFlix",
+            "format": "mp4",
+        })
 
     return sources
 
@@ -104,16 +89,9 @@ def bollyflix(title: str, tmdb_id: str = "", year: str = "", media_type: str = "
     if not best:
         return []
 
-    html = cf_get(best["url"], headers={"Referer": BASE, "User-Agent": UA}, timeout=15)
+    html = cf_get(best["url"], headers={"Referer": best["url"], "User-Agent": UA}, timeout=10)
     if not html:
         return []
 
     sources = _extract_links(html, post_url=best["url"])
-    scored = []
-    for s in sources:
-        sc = score_content(s.get("url", ""), title, year, media_type)
-        if sc >= 15:
-            s["relevance_score"] = sc
-            scored.append(s)
-    scored.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
-    return scored[:8]
+    return sources[:8]

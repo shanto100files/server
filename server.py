@@ -22,6 +22,7 @@ from providers.flixsearch import flixsearch
 from providers.domain_discovery import discover_deep
 from providers.domain_health import check_all_domains, get_all_status
 import providers.auto_resolver as auto_resolver
+from providers import anime as anime_provider
 
 
 app = FastAPI(title="CinePix Server", version="3.1")
@@ -1321,6 +1322,32 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
         },
     )
 
+@app.get("/api/anime/search")
+async def anime_search(q: str = Query(...)):
+    results = await asyncio.get_event_loop().run_in_executor(executor, lambda: anime_provider.search(q))
+    return {"results": results, "count": len(results)}
+
+@app.get("/api/anime/home")
+async def anime_home():
+    results = await asyncio.get_event_loop().run_in_executor(executor, anime_provider.home)
+    return {"sections": results}
+
+@app.get("/api/anime/info")
+async def anime_info(url: str = Query(...)):
+    data = await asyncio.get_event_loop().run_in_executor(executor, lambda: anime_provider.info(url))
+    return data
+
+@app.get("/api/anime/resolve")
+async def anime_resolve(url: str = Query(...)):
+    links = [{"url": url, "server": ""}]
+    results = await asyncio.get_event_loop().run_in_executor(executor, lambda: anime_provider.resolve_links(links))
+    return {"sources": results, "count": len(results)}
+
+@app.get("/api/anime/episodes")
+async def anime_episodes(url: str = Query(...)):
+    data = await asyncio.get_event_loop().run_in_executor(executor, lambda: anime_provider.info(url))
+    return {"episodes": data.get("episodes", []), "is_movie": data.get("is_movie", False), "sources": data.get("sources", [])}
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -1333,5 +1360,6 @@ if __name__ == "__main__":
     print("  Memory Cache: 1000 entries (10min TTL, OrderedDict LRU)")
     print("  Rate Limit: 60 req/min per IP")
     print("  Providers: CineFreak, HDHub4U, MLSBD, SouthFreak, BollyFlix, FlixSearch")
+    print("  Anime: animedubhindi.cc + HubCloud/GDFlix resolvers")
     print("=" * 50)
     uvicorn.run(app, host="0.0.0.0", port=8000)

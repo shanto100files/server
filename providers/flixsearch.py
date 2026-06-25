@@ -13,18 +13,18 @@ def _search_fslim(title: str) -> list[str]:
     q = urlquote(title)
     
     search_urls = [
-        f"https://fsleech.com/?s={q}",
-        f"https://filepress.click/?s={q}",
+        f"https://cinevexus.net/?s={q}",
+        f"https://vegamovies.dev/?s={q}",
     ]
     
-    for url in search_urls:
-        html = cf_get(url, timeout=10)
+    for site_url in search_urls:
+        html = cf_get(site_url, timeout=10)
         if not html:
             continue
         
-        links = re.findall(r'href="(https?://fsleech\.com/[^"]+)"', html)
+        links = re.findall(r'href="(https?://[^"]*cinevexus\.net/[^"]+)"', html)
         if not links:
-            links = re.findall(r'href="(https?://filepress\.click/[^"]+)"', html)
+            links = re.findall(r'href="(https?://[^"]*vegamovies\.dev/[^"]+)"', html)
         
         for link in links[:3]:
             if link not in urls:
@@ -57,20 +57,16 @@ def _search_gdlink(title: str) -> list[str]:
     urls = []
     
     search_sites = [
-        f"https://gdlink.buzz/?s={q}",
+        f"https://google.com/search?q={q}+gdflix+download",
     ]
     
     for url in search_sites:
-        html = cf_get(url, timeout=8)
+        html = http_get(url, timeout=8)
         if not html:
             continue
         
-        post_links = re.findall(r'href="(https?://gdlink\.buzz/[^"]+)"', html)
-        for link in post_links[:2]:
-            post_html = cf_get(link, timeout=8)
-            if post_html:
-                dl_links = re.findall(r'href="(https?://[^"]*(?:drive|gdflix|pixeldrain|r2\.dev)[^"]*)"', post_html)
-                urls.extend(dl_links)
+        dl_links = re.findall(r'href="(https?://[^"]*(?:gdflix|drive|pixeldrain|r2\.dev)[^"]*)"', html.text if hasattr(html, 'text') else "")
+        urls.extend(dl_links[:6])
     
     return list(set(urls))[:6]
 
@@ -103,16 +99,17 @@ def flixsearch(title: str, tmdb_id: str = "") -> list[dict]:
         
         resolved = resolve_any(url)
         if resolved:
-            for r_url, r_meta in resolved:
+            for r in resolved:
+                r_url = r.get("url", "")
                 if is_direct_streamable(r_url):
                     r_clean = r_url.split("?")[0]
                     if r_clean not in seen:
                         seen.add(r_clean)
                         sources.append({
                             "url": r_url,
-                            "quality": r_meta.get("quality", "HD"),
+                            "quality": r.get("quality", "HD"),
                             "provider": "FlixSearch",
-                            "format": r_meta.get("format", "mp4"),
+                            "format": r.get("format", "mp4"),
                         })
         elif is_direct_streamable(url):
             fmt = "mp4"

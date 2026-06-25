@@ -4,7 +4,7 @@ from client import cf_get
 from providers.gdflix import resolve_gdflix, _is_streamable
 from providers.auto_resolver import resolve_any, is_direct_streamable, content_matches, title_matches_search, score_content
 
-MLSBD_DOMAINS = ["https://mlsbd.co", "https://mlsbd.com"]
+MLSBD_DOMAINS = ["https://mlsbd.co", "https://mlsbd.net", "https://mlsbd.com"]
 
 def _fetch(url, headers=None):
     return cf_get(url, headers=headers, timeout=15)
@@ -13,9 +13,18 @@ def _resolve_savelinks(url):
     html = _fetch(url, headers={"Referer": "https://mlsbd.co"})
     if not html:
         return []
-    links = re.findall(r'href="(https?://[^"]*(?:filepress|gdflix|pixeldrain|mega|drive)[^"]*)"', html)
+    from urllib.parse import urlparse
+    links = re.findall(r'href="(https?://[^"]*)"', html)
     js_links = re.findall(r'"(https?://[^"]*(?:filepress|gdflix)[^"]*)"', html)
-    return list(set(links + js_links))
+    skip_hosts = {"mlsbd.co", "mlsbd.net", "mlsbd.com", "t.me", "telegram.me", "telegram.dog"}
+    seen, result = set(), []
+    base_host = urlparse(url).hostname or "savelinks.me"
+    for link in list(set(links + js_links)):
+        host = urlparse(link).hostname or ""
+        if host != base_host and host not in seen and host not in skip_hosts:
+            seen.add(host)
+            result.append(link)
+    return result
 
 def _extract_post_metadata(html: str) -> dict:
     meta = {}
@@ -66,10 +75,11 @@ def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
         soup = BeautifulSoup(html, "lxml")
 
         post_url = None
+
         for a in soup.select("a[href]"):
             href = a.get("href", "")
             text = a.get_text(strip=True)
-            if domain in href and title.split()[0].lower() in text.lower() and href != f"{domain}/":
+            if domain in href and title.split()[0].lower() in text.lower() and href != f"{domain}/" and href != domain:
                 if title_matches_search(text, title, query_year=year):
                     post_url = href
                     break
@@ -77,7 +87,13 @@ def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
             for a in soup.select("a[href]"):
                 href = a.get("href", "")
                 text = a.get_text(strip=True).lower()
-                if domain in href and title.split()[0].lower() in text and href != f"{domain}/":
+                if domain in href and title.split()[0].lower() in text and href != f"{domain}/" and href != domain:
+                    post_url = href
+                    break
+        if not post_url:
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
+                if domain in href and "/?s=" not in href and href != domain and href != f"{domain}/":
                     post_url = href
                     break
         if not post_url:
@@ -126,17 +142,16 @@ def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
                                 if ep_label:
                                     g["episode_label"] = ep_label
                                 sources.append(g)
-                        else:
-                            if _is_streamable(link):
-                                fmt = "mkv" if ".mkv" in link else "mp4"
-                                base = {"url": link, "quality": quality, "provider": "MLSBD", "format": fmt}
-                                if lang: base["language"] = lang
-                                if file_size: base["fileSize"] = file_size
-                                if ep_label: base["episode_label"] = ep_label
-                                sources.append(base)
-                    elif _is_streamable(link):
-                        fmt = "mkv" if ".mkv" in link else "mp4"
-                        base = {"url": link, "quality": quality, "provider": "MLSBD", "format": fmt}
+                    elif "hubcloud" in link or "hubdrive" in link:
+                        res = resolve_any(link, quality=quality, referer=href)
+                        if res:
+                            for r in res:
+                                if lang and not r.get("language"): r["language"] = lang
+                                if file_size and not r.get("fileSize"): r["fileSize"] = file_size
+                                if ep_label: r["episode_label"] = ep_label
+                                sources.append(r)
+                    elif "filepress" in link or _is_streamable(link):
+                        base = {"url": link, "quality": quality, "provider": "MLSBD", "format": "mp4"}
                         if lang: base["language"] = lang
                         if file_size: base["fileSize"] = file_size
                         if ep_label: base["episode_label"] = ep_label
@@ -178,8 +193,11 @@ def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
     scored = []
     for s in sources:
         sc = score_content(s.get("url", ""), title, year, media_type)
-        if sc >= 15:
-            s["relevance_score"] = sc
+        if sc >= 15 or year:
+            s["relevance_score"] = max(sc, 15)
+            scored.append(s)
+        elif not year and sources:
+            s["relevance_score"] = 15
             scored.append(s)
     scored.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
-    return scored[:8]
+    return scored[:10]
