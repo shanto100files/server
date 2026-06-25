@@ -63,7 +63,7 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
     sources = []
     seen = set()
 
-    all_download_links = []
+    all_links = []
 
     for a in soup.select("a[href]"):
         href = a.get("href", "")
@@ -79,9 +79,24 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
             q_match = re.search(r"(2160p|1080p|720p|480p)", text + " " + href)
             if q_match:
                 quality = q_match.group(1)
-            all_download_links.append((href, quality))
+            is_gdrive = "drive.google.com" in href
+            all_links.append((href, quality, is_gdrive))
 
-    for href, quality in all_download_links[:5]:
+    gdrive_links = [(h, q) for h, q, g in all_links if g]
+    other_links = [(h, q) for h, q, g in all_links if not g]
+
+    preferred = []
+    seen_q = set()
+    for href, quality in gdrive_links:
+        if quality not in seen_q:
+            preferred.append((href, quality))
+            seen_q.add(quality)
+    for href, quality in other_links:
+        if quality not in seen_q:
+            preferred.append((href, quality))
+            seen_q.add(quality)
+
+    for href, quality in preferred[:5]:
         if len(sources) >= 5:
             break
         if "fxlinks.rest" in href:
