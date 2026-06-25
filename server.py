@@ -788,7 +788,7 @@ async def admin_providers(request: Request):
     
     provider_health = get_provider_health()
     providers = []
-    for name in ["CineFreak", "HDHub4U", "MLSBD", "SouthFreak", "BollyFlix", "FlixSearch"]:
+    for name in ["CineFreak", "HDHub4U", "MLSBD", "SouthFreak", "BollyFlix"]:
         h = provider_health.get(name, {})
         providers.append({
             "name": name,
@@ -822,9 +822,6 @@ async def admin_test_provider(request: Request, name: str = Query(...)):
         elif name == "HDHub4U":
             from providers.hdhub4u import hdhub4u
             result = await asyncio.get_event_loop().run_in_executor(executor, lambda: asyncio.run(hdhub4u("The Batman 2022")))
-        elif name == "FlixSearch":
-            from providers.flixsearch import flixsearch
-            result = await asyncio.get_event_loop().run_in_executor(executor, lambda: asyncio.run(flixsearch("The Batman 2022")))
         else:
             result = []
         elapsed = round(time.time() - start, 2)
@@ -1248,7 +1245,6 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
             ("MLSBD", lambda: mlsbd(title, tmdb_id, season, episode, year, type)),
             ("SouthFreak", lambda: southfreak(title, tmdb_id, year, type)),
             ("BollyFlix", lambda: bollyflix(title, tmdb_id, year, type)),
-            ("FlixSearch", lambda: flixsearch(title, tmdb_id)),
         ]
 
         total = len(tasks)
@@ -1355,7 +1351,7 @@ if __name__ == "__main__":
     print("  Semaphore: 20 (provider throttle)")
     print("  Memory Cache: 1000 entries (10min TTL, OrderedDict LRU)")
     print("  Rate Limit: 60 req/min per IP")
-    print("  Providers: CineFreak, HDHub4U, MLSBD, SouthFreak, BollyFlix, FlixSearch")
+    print("  Providers: CineFreak, HDHub4U, MLSBD, SouthFreak, BollyFlix")
     print("  Anime: animedubhindi.cc + HubCloud/GDFlix resolvers")
     print("=" * 50)
     uvicorn.run(app, host="0.0.0.0", port=8000)
