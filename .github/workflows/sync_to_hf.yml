@@ -17,5 +17,5 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git push --force https://neil13:$HF_TOKEN@huggingface.co/spaces/neil13/server main
+          git push --force https://neil13:$HF_TOKEN@huggingface.co/spaces/neil13/server HEAD:main
 
