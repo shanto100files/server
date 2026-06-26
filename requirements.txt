@@ -7,5 +7,3 @@ beautifulsoup4==4.12.3
 aiosqlite==0.20.0
 redis>=5.0.0
 python-dotenv>=1.0.0
-flet>=0.22.0
-flet-fastapi>=0.22.0
