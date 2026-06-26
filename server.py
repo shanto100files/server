@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import time
 import threading
+import inspect
 from collections import OrderedDict
 
 from cache import init_db, cache_get, cache_set, cache_stats, cache_clear
@@ -37,7 +38,7 @@ app.add_middleware(
 )
 
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=50)
-_provider_semaphore = asyncio.Semaphore(20)
+_provider_semaphore = asyncio.Semaphore(35)
 
 _mem_cache = OrderedDict()
 _mem_cache_ttl = 600
@@ -1162,43 +1163,73 @@ async def sources(tmdb_id: str, type: str = "movie", title: str = "", season: in
 
     loop = asyncio.get_event_loop()
     all_sources = []
+    year = ""
+    EARLY_EXIT_THRESHOLD = 10
+    PROVIDER_TIMEOUT = 45.0
 
+    # Priority order: fastest providers first
     tasks = [
-        ("cinefreak", lambda: cinefreak(tmdb_id, type, title, season, episode)),
-        ("mlsbd", lambda: mlsbd(title, tmdb_id)),
-        ("hdhub4u", lambda: hdhub4u(title, tmdb_id)),
-        ("southfreak", lambda: southfreak(title, tmdb_id)),
-        ("bollyflix", lambda: bollyflix(title, tmdb_id)),
-        ("vegamovies", lambda: vegamovies(title, tmdb_id, season, episode, year, type)),
-        ("4khdhub", lambda: fourkhd(title, tmdb_id)),
+        ("cinefreak", cinefreak, (tmdb_id, type, title, season, episode)),
+        ("hdhub4u", hdhub4u, (title, tmdb_id)),
+        ("mlsbd", mlsbd, (title, tmdb_id)),
+        ("southfreak", southfreak, (title, tmdb_id)),
+        ("bollyflix", bollyflix, (title, tmdb_id)),
+        ("vegamovies", vegamovies, (title, tmdb_id, season, episode, year, type)),
+        ("4khdhub", fourkhd, (title, tmdb_id)),
     ]
 
-    async def run_provider(name, func):
+    collected_sources = []
+    seen_urls = set()
+    enough = asyncio.Event()
+
+    async def run_provider(name, func, args):
+        if enough.is_set():
+            return []
         try:
             async with _provider_semaphore:
-                result = await loop.run_in_executor(executor, func)
-            return result
-        except Exception as e:
+                if enough.is_set():
+                    return []
+                if inspect.iscoroutinefunction(func):
+                    result = await asyncio.wait_for(func(*args), timeout=PROVIDER_TIMEOUT)
+                else:
+                    result = await asyncio.wait_for(
+                        loop.run_in_executor(executor, lambda: func(*args)),
+                        timeout=PROVIDER_TIMEOUT
+                    )
+            new_sources = result or []
+            # Check early exit threshold
+            unique_new = []
+            for s in new_sources:
+                url = s.get("url", "").split("?")[0].rstrip("/")
+                if url not in seen_urls:
+                    seen_urls.add(url)
+                    _enrich_source(s)
+                    unique_new.append(s)
+            collected_sources.extend(unique_new)
+            if len(collected_sources) >= EARLY_EXIT_THRESHOLD:
+                enough.set()
+            return unique_new
+        except asyncio.TimeoutError:
+            return []
+        except Exception:
             return []
 
-    results = await asyncio.gather(*[run_provider(n, f) for n, f in tasks])
-    for r in results:
-        all_sources.extend(r)
+    provider_futures = [asyncio.ensure_future(run_provider(n, f, a)) for n, f, a in tasks]
+    await asyncio.gather(*provider_futures, return_exceptions=True)
 
-    seen_urls = set()
-    unique_sources = []
-    for s in all_sources:
-        url = s.get("url", "").split("?")[0].rstrip("/")
-        if url not in seen_urls:
-            seen_urls.add(url)
-            _enrich_source(s)
-            unique_sources.append(s)
+    # Cancel any remaining tasks if early exit triggered
+    for fut in provider_futures:
+        if not fut.done():
+            fut.cancel()
+
+    unique_sources = collected_sources
 
     result = {
         "sources": unique_sources,
         "count": len(unique_sources),
         "tmdb_id": tmdb_id,
         "title": title,
+        "early_exit": enough.is_set(),
     }
 
     await cache_set(cache_key, result, "sources")
@@ -1238,83 +1269,88 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
     set_inflight(cache_key, dedup_event)
 
     async def event_generator():
-        loop = asyncio.get_event_loop()
-        seen_urls = set()
-        count = 0
-        chunks = []
-
-        tasks = [
-            ("HDHub4U", lambda: hdhub4u(title, tmdb_id)),
-            ("4KHDHub", lambda: fourkhd(title, tmdb_id)),
-            ("CineFreak", lambda: cinefreak(tmdb_id, type, title, season, episode)),
-            ("MLSBD", lambda: mlsbd(title, tmdb_id, season, episode, year, type)),
-            ("SouthFreak", lambda: southfreak(title, tmdb_id, year, type)),
-            ("BollyFlix", lambda: bollyflix(title, tmdb_id, year, type)),
-            ("VegaMovies", lambda: vegamovies(title, tmdb_id, season, episode, year, type)),
-        ]
-
-        total = len(tasks)
-        provider_times = {}
-        enough = False
-
-        async def run_one(name, func):
-            nonlocal enough
-            if enough:
-                return name, []
-            t0 = time.time()
-            try:
-                async with _provider_semaphore:
-                    result = await loop.run_in_executor(executor, func)
-                duration = time.time() - t0
-                provider_times[name] = round(duration, 2)
-                record_provider(name, bool(result), duration)
-                return name, result or []
-            except Exception as e:
-                duration = time.time() - t0
-                provider_times[name] = round(duration, 2)
-                record_provider(name, False, duration)
-                return name, []
-
-        future_map = {}
-        for name, func in tasks:
-            fut = asyncio.ensure_future(run_one(name, func))
-            future_map[fut] = name
-            chunk = f"data: {_json.dumps({'type': 'provider_start', 'name': name})}\n\n"
-            chunks.append(chunk)
-            yield chunk
-
-        done_count = 0
-        pending = set(future_map.keys())
-
-        while pending:
-            done_set, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            for fut in done_set:
-                done_count += 1
-                name, result = fut.result()
-
-                new_sources = []
-                for s in result:
-                    url = s.get("url", "").split("?")[0].rstrip("/")
-                    if url not in seen_urls:
-                        seen_urls.add(url)
-                        _enrich_source(s)
-                        new_sources.append(s)
-                        count += 1
-
-                if count >= 15:
-                    enough = True
-
-                chunk = f"data: {_json.dumps({'type': 'provider_done', 'name': name, 'sources': new_sources, 'count': len(new_sources), 'done': done_count, 'total': total})}\n\n"
+        try:
+            loop = asyncio.get_event_loop()
+            seen_urls = set()
+            count = 0
+            chunks = []
+    
+            tasks = [
+                ("HDHub4U", hdhub4u, (title, tmdb_id)),
+                ("4KHDHub", fourkhd, (title, tmdb_id)),
+                ("CineFreak", cinefreak, (tmdb_id, type, title, season, episode)),
+                ("MLSBD", mlsbd, (title, tmdb_id, season, episode, year, type)),
+                ("SouthFreak", southfreak, (title, tmdb_id, year, type)),
+                ("BollyFlix", bollyflix, (title, tmdb_id, year, type)),
+                ("VegaMovies", vegamovies, (title, tmdb_id, season, episode, year, type)),
+            ]
+    
+            total = len(tasks)
+            provider_times = {}
+            enough = False
+    
+            async def run_one(name, func, args):
+                nonlocal enough
+                if enough:
+                    return name, []
+                t0 = time.time()
+                try:
+                    async with _provider_semaphore:
+                        if inspect.iscoroutinefunction(func):
+                            result = await func(*args)
+                        else:
+                            result = await loop.run_in_executor(executor, lambda: func(*args))
+                    duration = time.time() - t0
+                    provider_times[name] = round(duration, 2)
+                    record_provider(name, bool(result), duration)
+                    return name, result or []
+                except Exception as e:
+                    duration = time.time() - t0
+                    provider_times[name] = round(duration, 2)
+                    record_provider(name, False, duration)
+                    return name, []
+    
+            future_map = {}
+            for name, func, args in tasks:
+                fut = asyncio.ensure_future(run_one(name, func, args))
+                future_map[fut] = name
+                chunk = f"data: {_json.dumps({'type': 'provider_start', 'name': name})}\n\n"
                 chunks.append(chunk)
                 yield chunk
-
-        done_chunk = f"data: {_json.dumps({'type': 'done', 'total_sources': count, 'provider_times': provider_times})}\n\n"
-        chunks.append(done_chunk)
-        yield done_chunk
-
-        mem_cache_set(cache_key, chunks)
-        dedup_event.set()
-        remove_inflight(cache_key)
+    
+            done_count = 0
+            pending = set(future_map.keys())
+    
+            while pending:
+                done_set, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for fut in done_set:
+                    done_count += 1
+                    name, result = fut.result()
+    
+                    new_sources = []
+                    for s in result:
+                        url = s.get("url", "").split("?")[0].rstrip("/")
+                        if url not in seen_urls:
+                            seen_urls.add(url)
+                            _enrich_source(s)
+                            new_sources.append(s)
+                            count += 1
+    
+                    if count >= 15:
+                        enough = True
+    
+                    chunk = f"data: {_json.dumps({'type': 'provider_done', 'name': name, 'sources': new_sources, 'count': len(new_sources), 'done': done_count, 'total': total})}\n\n"
+                    chunks.append(chunk)
+                    yield chunk
+    
+            done_chunk = f"data: {_json.dumps({'type': 'done', 'total_sources': count, 'provider_times': provider_times})}\n\n"
+            chunks.append(done_chunk)
+            yield done_chunk
+    
+            mem_cache_set(cache_key, chunks)
+        finally:
+            dedup_event.set()
+            remove_inflight(cache_key)
 
     return StreamingResponse(
         event_generator(),

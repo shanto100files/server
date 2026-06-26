@@ -1,16 +1,17 @@
 import re
+import asyncio
 from bs4 import BeautifulSoup
-from client import cf_get
+from client import async_cf_get
 from providers.gdflix import resolve_gdflix, _is_streamable
 from providers.auto_resolver import resolve_any, is_direct_streamable, content_matches, title_matches_search, score_content
 
 MLSBD_DOMAINS = ["https://mlsbd.co", "https://mlsbd.net", "https://mlsbd.com"]
 
-def _fetch(url, headers=None):
-    return cf_get(url, headers=headers, timeout=15)
+async def _fetch(url, headers=None):
+    return await async_cf_get(url, headers=headers, timeout=15)
 
-def _resolve_savelinks(url):
-    html = _fetch(url, headers={"Referer": "https://mlsbd.co"})
+async def _resolve_savelinks(url):
+    html = await _fetch(url, headers={"Referer": "https://mlsbd.co"})
     if not html:
         return []
     from urllib.parse import urlparse
@@ -66,10 +67,11 @@ def _extract_quality(text):
     m = re.search(r"(1080p|720p|480p|4K|2160p)", text, re.IGNORECASE)
     return m.group(1) if m else "HD"
 
-def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
+async def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
     sources = []
+    loop = asyncio.get_event_loop()
     for domain in MLSBD_DOMAINS:
-        html = _fetch(f"{domain}/?s={title}", headers={"Referer": domain})
+        html = await _fetch(f"{domain}/?s={title}", headers={"Referer": domain})
         if not html:
             continue
         soup = BeautifulSoup(html, "lxml")
@@ -99,7 +101,7 @@ def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
         if not post_url:
             continue
 
-        post_html = _fetch(post_url, headers={"Referer": domain})
+        post_html = await _fetch(post_url, headers={"Referer": domain})
         if not post_html:
             continue
 
@@ -129,10 +131,10 @@ def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
             ep_label = current_ep
 
             if "savelinks" in href:
-                resolved = _resolve_savelinks(href)
+                resolved = await _resolve_savelinks(href)
                 for link in resolved:
                     if "gdflix" in link:
-                        gdflix_resolved = resolve_gdflix(link, quality=quality, referer=href)
+                        gdflix_resolved = await loop.run_in_executor(None, lambda: resolve_gdflix(link, quality=quality, referer=href))
                         if gdflix_resolved:
                             for g in gdflix_resolved:
                                 if lang and not g.get("language"):
@@ -143,7 +145,7 @@ def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
                                     g["episode_label"] = ep_label
                                 sources.append(g)
                     elif "hubcloud" in link or "hubdrive" in link:
-                        res = resolve_any(link, quality=quality, referer=href)
+                        res = await loop.run_in_executor(None, lambda: resolve_any(link, quality=quality, referer=href))
                         if res:
                             for r in res:
                                 if lang and not r.get("language"): r["language"] = lang
@@ -164,7 +166,7 @@ def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
             else:
                 fmt = "mkv" if ".mkv" in href or "mkv" in el_text.lower() else "mp4"
                 if "gdflix" in href:
-                    gdflix_resolved = resolve_gdflix(href, quality=quality, referer=post_url)
+                    gdflix_resolved = await loop.run_in_executor(None, lambda: resolve_gdflix(href, quality=quality, referer=post_url))
                     if gdflix_resolved:
                         for g in gdflix_resolved:
                             if lang and not g.get("language"):

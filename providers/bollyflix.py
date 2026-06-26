@@ -1,6 +1,7 @@
 import re
+import asyncio
 from bs4 import BeautifulSoup
-from client import cf_get
+from client import async_cf_get
 from urllib.parse import urlparse, urljoin
 from providers.auto_resolver import title_matches_search, resolve_any
 
@@ -8,10 +9,10 @@ BOLLYFLIX_DOMAINS = ["https://bollyflix.med", "https://bollyflix.run"]
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
 
 
-def _search(title: str) -> list[dict]:
+async def _search(title: str) -> list[dict]:
     for BASE in BOLLYFLIX_DOMAINS:
         url = f"{BASE}/?s={title}"
-        html = cf_get(url, headers={"Referer": BASE, "User-Agent": UA}, timeout=10)
+        html = await async_cf_get(url, headers={"Referer": BASE, "User-Agent": UA}, timeout=10)
         if not html:
             continue
 
@@ -32,13 +33,14 @@ def _search(title: str) -> list[dict]:
     return []
 
 
-def _resolve_fxlinks(fx_url: str, quality: str = "HD") -> list[dict]:
-    html = cf_get(fx_url, headers={"Referer": fx_url, "User-Agent": UA}, timeout=10)
+async def _resolve_fxlinks(fx_url: str, quality: str = "HD") -> list[dict]:
+    html = await async_cf_get(fx_url, headers={"Referer": fx_url, "User-Agent": UA}, timeout=10)
     if not html:
         return []
     soup = BeautifulSoup(html, "lxml")
     sources = []
     seen = set()
+    loop = asyncio.get_event_loop()
     for a in soup.select("a[href]"):
         href = a.get("href", "")
         text = a.get_text(strip=True).lower()
@@ -49,7 +51,7 @@ def _resolve_fxlinks(fx_url: str, quality: str = "HD") -> list[dict]:
         seen.add(href)
         q_match = re.search(r"(2160p|1080p|720p|480p)", text + " " + href)
         q = q_match.group(1) if q_match else quality
-        resolved = resolve_any(href, quality=q, referer=fx_url)
+        resolved = await loop.run_in_executor(None, lambda: resolve_any(href, quality=q, referer=fx_url))
         for r in resolved:
             r["provider"] = "BollyFlix"
         sources.extend(resolved)
@@ -58,7 +60,7 @@ def _resolve_fxlinks(fx_url: str, quality: str = "HD") -> list[dict]:
     return sources
 
 
-def _extract_links(html: str, post_url: str = "") -> list[dict]:
+async def _extract_links(html: str, post_url: str = "") -> list[dict]:
     soup = BeautifulSoup(html, "lxml")
     sources = []
     seen = set()
@@ -100,7 +102,7 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
         if len(sources) >= 5:
             break
         if "fxlinks.rest" in href:
-            fx_resolved = _resolve_fxlinks(href, quality)
+            fx_resolved = await _resolve_fxlinks(href, quality)
             if fx_resolved:
                 sources.extend(fx_resolved)
                 continue
@@ -114,8 +116,8 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
     return sources
 
 
-def bollyflix(title: str, tmdb_id: str = "", year: str = "", media_type: str = "") -> list[dict]:
-    results = _search(title)
+async def bollyflix(title: str, tmdb_id: str = "", year: str = "", media_type: str = "") -> list[dict]:
+    results = await _search(title)
     if not results:
         return []
 
@@ -135,9 +137,9 @@ def bollyflix(title: str, tmdb_id: str = "", year: str = "", media_type: str = "
     if not best:
         return []
 
-    html = cf_get(best["url"], headers={"Referer": best["url"], "User-Agent": UA}, timeout=10)
+    html = await async_cf_get(best["url"], headers={"Referer": best["url"], "User-Agent": UA}, timeout=10)
     if not html:
         return []
 
-    sources = _extract_links(html, post_url=best["url"])
+    sources = await _extract_links(html, post_url=best["url"])
     return sources[:8]

@@ -38,6 +38,7 @@ async def init_db():
             _use_redis = False
     if not _use_redis:
         async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("PRAGMA journal_mode=WAL;")
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS cache (
                     key TEXT PRIMARY KEY,

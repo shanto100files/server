@@ -1,8 +1,9 @@
 import re
 import base64
+import asyncio
 from urllib.parse import quote as urlquote
 from bs4 import BeautifulSoup
-from client import http_get, cf_get
+from client import async_cf_get
 from providers.gdflix import resolve_gdflix
 from providers.auto_resolver import resolve_any, is_direct_streamable
 
@@ -35,21 +36,17 @@ def _get_card_episode_range(card) -> tuple[int, int]:
             return (s, e)
     return (0, 0)
 
-def _get_domain() -> str:
+async def _get_domain() -> str:
     for domain in CINEFREAK_DOMAINS:
-        r = http_get(domain, timeout=5)
-        if r and r.status_code == 200:
+        r = await async_cf_get(domain, timeout=5)
+        if r:
             return domain
     return CINEFREAK_DOMAINS[0]
 
-def _fetch(url: str, headers: dict = None) -> str | None:
-    r = http_get(url, headers=headers or {}, timeout=15)
+async def _fetch(url: str, headers: dict = None) -> str | None:
+    r = await async_cf_get(url, headers=headers or {}, timeout=15)
     if r:
-        return r.text
-    if "cinecloud" in url:
-        text = cf_get(url, headers=headers or {}, timeout=15)
-        if text:
-            return text
+        return r
     return None
 
 def _parse_filename_meta(filename: str) -> dict:
@@ -77,8 +74,8 @@ def _parse_filename_meta(filename: str) -> dict:
         meta["format"] = "mp4"
     return meta
 
-def _fetch_cinecloud_meta(page_url: str) -> dict:
-    html = _fetch(page_url, {"Referer": "https://new5.cinecloud.site", "Cookie": "xla=s4t"})
+async def _fetch_cinecloud_meta(page_url: str) -> dict:
+    html = await _fetch(page_url, {"Referer": "https://new5.cinecloud.site", "Cookie": "xla=s4t"})
     if not html:
         return {}
     soup = BeautifulSoup(html, "lxml")
@@ -94,9 +91,10 @@ def _fetch_cinecloud_meta(page_url: str) -> dict:
             meta["fileSize"] = size_el.get_text(strip=True)
     return meta
 
-def _extract_direct_links(html: str) -> list[str]:
+async def _extract_direct_links(html: str) -> list[str]:
     results = []
     soup = BeautifulSoup(html, "lxml")
+    loop = asyncio.get_event_loop()
     for a in soup.select("a[href]"):
         href = a.get("href", "")
         if not href:
@@ -106,18 +104,18 @@ def _extract_direct_links(html: str) -> list[str]:
             if full not in results:
                 results.append(full)
         elif "gdflix" in full:
-            gdflix_resolved = resolve_gdflix(full)
+            gdflix_resolved = await loop.run_in_executor(None, lambda: resolve_gdflix(full))
             for g in gdflix_resolved:
                 u = g.get("url", "")
                 if u and u not in results:
                     results.append(u)
     return results
 
-def _resolve_cinecloud(page_url: str, _depth: int = 0) -> tuple[list[str], dict]:
+async def _resolve_cinecloud(page_url: str, _depth: int = 0) -> tuple[list[str], dict]:
     if _depth > 4:
         return [], {}
 
-    html = _fetch(page_url, {"Referer": "https://new5.cinecloud.site", "Cookie": "xla=s4t"})
+    html = await _fetch(page_url, {"Referer": "https://new5.cinecloud.site", "Cookie": "xla=s4t"})
     if not html or len(html) < 500:
         return [], {}
 
@@ -135,7 +133,7 @@ def _resolve_cinecloud(page_url: str, _depth: int = 0) -> tuple[list[str], dict]
         if prev and "size" in prev.get_text(strip=True).lower():
             meta["fileSize"] = size_el.get_text(strip=True)
 
-    links = _extract_direct_links(html)
+    links = await _extract_direct_links(html)
     if links:
         return links, meta
 
@@ -144,9 +142,9 @@ def _resolve_cinecloud(page_url: str, _depth: int = 0) -> tuple[list[str], dict]
         full = href if href.startswith("http") else f"{CINECLOUD_BASE}{href}"
 
         if "/d/" in href:
-            dl_html = _fetch(full, {"Referer": "https://new5.cinecloud.site", "Cookie": "xla=s4t"})
+            dl_html = await _fetch(full, {"Referer": "https://new5.cinecloud.site", "Cookie": "xla=s4t"})
             if dl_html:
-                dl_links = _extract_direct_links(dl_html)
+                dl_links = await _extract_direct_links(dl_html)
                 if dl_links:
                     return dl_links, meta
 
@@ -155,9 +153,9 @@ def _resolve_cinecloud(page_url: str, _depth: int = 0) -> tuple[list[str], dict]
         full = href if href.startswith("http") else f"{CINECLOUD_BASE}{href}"
 
         if "/w/" in href or "/gp/" in href:
-            inner_html = _fetch(full, {"Referer": "https://new5.cinecloud.site", "Cookie": "xla=s4t"})
+            inner_html = await _fetch(full, {"Referer": "https://new5.cinecloud.site", "Cookie": "xla=s4t"})
             if inner_html:
-                inner_links = _extract_direct_links(inner_html)
+                inner_links = await _extract_direct_links(inner_html)
                 if inner_links:
                     return inner_links, meta
 
@@ -165,9 +163,10 @@ def _resolve_cinecloud(page_url: str, _depth: int = 0) -> tuple[list[str], dict]
         href = a.get("href", "")
         full = href if href.startswith("http") else f"{CINECLOUD_BASE}{href}"
         if "/f/" in href and full != page_url:
-            return _resolve_cinecloud(full, _depth + 1)
+            return await _resolve_cinecloud(full, _depth + 1)
 
-    resolved = resolve_any(page_url, referer=CINECLOUD_BASE)
+    loop = asyncio.get_event_loop()
+    resolved = await loop.run_in_executor(None, lambda: resolve_any(page_url, referer=CINECLOUD_BASE))
     if resolved:
         return [r["url"] for r in resolved], meta
 
@@ -203,12 +202,12 @@ def _get_card_episode_range(card) -> tuple[int, int]:
             return (s, e)
     return (0, 0)
 
-def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, episode: int = 0) -> list[dict]:
+async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, episode: int = 0) -> list[dict]:
     sources = []
-    domain = _get_domain()
+    domain = await _get_domain()
     query = f"{title} Season {season}" if media_type == "tv" and season > 0 else title
 
-    search_html = _fetch(
+    search_html = await _fetch(
         f"{domain}/search-api.php?q={urlquote(query)}&pg=1"
     )
     if not search_html:
@@ -236,7 +235,7 @@ def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, episod
     if not post_path.startswith("http"):
         post_path = f"{domain}/{post_path}/"
 
-    post_html = _fetch(post_path, {"Cookie": "xla=s4t"})
+    post_html = await _fetch(post_path, {"Cookie": "xla=s4t"})
     if not post_html:
         return sources
 
@@ -265,7 +264,7 @@ def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, episod
                                 decoded = base64.b64decode(m_id.group(1)).decode()
                                 decoded = re.sub(r'newgo\d+$', '', decoded)
                                 decoded = decoded.replace("/x/", "/f/")
-                                dl_links, cc_meta = _resolve_cinecloud(decoded)
+                                dl_links, cc_meta = await _resolve_cinecloud(decoded)
                                 for dl in dl_links:
                                     s = {"url": dl, "quality": cc_meta.get("quality", quality), "provider": "CineFreak", "format": cc_meta.get("format", "mp4"), "episode_label": cc_meta.get("episode_label", ep_label)}
                                     if cc_meta.get("season"): s["season"] = cc_meta["season"]
@@ -296,7 +295,7 @@ def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, episod
                             decoded = base64.b64decode(m_id.group(1)).decode()
                             decoded = re.sub(r'newgo\d+$', '', decoded)
                             decoded = decoded.replace("/x/", "/f/")
-                            dl_links, cc_meta = _resolve_cinecloud(decoded)
+                            dl_links, cc_meta = await _resolve_cinecloud(decoded)
                             for dl in dl_links:
                                 s = {"url": dl, "quality": cc_meta.get("quality", quality), "provider": "CineFreak", "format": cc_meta.get("format", "mp4"), "episode_label": cc_meta.get("episode_label", "")}
                                 if cc_meta.get("season"): s["season"] = cc_meta["season"]
@@ -314,7 +313,7 @@ def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, episod
                 elif "/f/" in href or "/x/" in href or "cinecloud" in href:
                     cinecloud_url = href if href.startswith("http") else f"{CINECLOUD_BASE}{href}"
                     cinecloud_url = cinecloud_url.replace("/x/", "/f/")
-                    dl_links, cc_meta = _resolve_cinecloud(cinecloud_url)
+                    dl_links, cc_meta = await _resolve_cinecloud(cinecloud_url)
                     for dl in dl_links:
                         s = {"url": dl, "quality": cc_meta.get("quality", quality), "provider": "CineFreak", "format": cc_meta.get("format", "mp4"), "episode_label": cc_meta.get("episode_label", "")}
                         if cc_meta.get("season"): s["season"] = cc_meta["season"]
@@ -334,7 +333,7 @@ def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, episod
             if "/f/" in href or "/x/" in href or "cinecloud" in href:
                 cinecloud_url = href if href.startswith("http") else f"{CINECLOUD_BASE}{href}"
                 cinecloud_url = cinecloud_url.replace("/x/", "/f/")
-                dl_links, cc_meta = _resolve_cinecloud(cinecloud_url)
+                dl_links, cc_meta = await _resolve_cinecloud(cinecloud_url)
                 for dl in dl_links:
                     s = {"url": dl, "quality": cc_meta.get("quality", quality), "provider": "CineFreak", "format": cc_meta.get("format", "mp4")}
                     if cc_meta.get("season"): s["season"] = cc_meta["season"]
@@ -355,7 +354,7 @@ def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, episod
                         decoded = base64.b64decode(m_id.group(1)).decode()
                         decoded = re.sub(r'newgo\d+$', '', decoded)
                         decoded = decoded.replace("/x/", "/f/")
-                        dl_links, cc_meta = _resolve_cinecloud(decoded)
+                        dl_links, cc_meta = await _resolve_cinecloud(decoded)
                         for dl in dl_links:
                             s = {"url": dl, "quality": cc_meta.get("quality", quality), "provider": "CineFreak", "format": cc_meta.get("format", "mp4")}
                             if cc_meta.get("season"): s["season"] = cc_meta["season"]

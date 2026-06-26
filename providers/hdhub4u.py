@@ -1,8 +1,9 @@
 import re
 import time
 import threading
+import asyncio
 from bs4 import BeautifulSoup
-from client import cf_get
+from client import async_cf_get
 from providers.hubcloud import extract_hubcloud
 from providers.gdflix import resolve_gdflix
 from providers.hubdrive import resolve_hubdrive
@@ -15,7 +16,7 @@ _sitemap_lock = threading.Lock()
 _SITEMAP_TTL = 3600
 
 
-def _load_sitemap() -> list[str]:
+async def _load_sitemap() -> list[str]:
     now = time.time()
     with _sitemap_lock:
         if _sitemap_cache["urls"] and now - _sitemap_cache["ts"] < _SITEMAP_TTL:
@@ -23,13 +24,13 @@ def _load_sitemap() -> list[str]:
 
     urls = []
     try:
-        index_r = cf_get(f"{_PRIMARY}/sitemap.xml", timeout=12)
+        index_r = await async_cf_get(f"{_PRIMARY}/sitemap.xml", timeout=12)
         if not index_r:
             return []
         soup = BeautifulSoup(index_r, "lxml-xml")
         post_sitemaps = [loc.text for loc in soup.select("loc") if "post-sitemap" in loc.text]
         for sm_url in post_sitemaps:
-            sm_html = cf_get(sm_url, timeout=12)
+            sm_html = await async_cf_get(sm_url, timeout=12)
             if sm_html:
                 sm_soup = BeautifulSoup(sm_html, "lxml-xml")
                 urls.extend(loc.text for loc in sm_soup.select("loc"))
@@ -81,8 +82,8 @@ def _slug_match(query: str, url: str) -> float:
     return score
 
 
-def _search_sitemap(title: str) -> str | None:
-    urls = _load_sitemap()
+async def _search_sitemap(title: str) -> str | None:
+    urls = await _load_sitemap()
     if not urls:
         return None
 
@@ -98,10 +99,11 @@ def _search_sitemap(title: str) -> str | None:
     return None
 
 
-def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
+async def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
     sources = []
+    loop = asyncio.get_event_loop()
 
-    permalink = _search_sitemap(title)
+    permalink = await _search_sitemap(title)
     if not permalink:
         return sources
 
@@ -111,7 +113,7 @@ def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
         if not test_url.startswith("http"):
             test_url = f"{domain}/{test_url}"
         try:
-            r_html = cf_get(test_url, timeout=10)
+            r_html = await async_cf_get(test_url, timeout=10)
             if r_html and len(r_html) > 1000:
                 post_url = test_url
                 break
@@ -121,7 +123,7 @@ def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
     if not post_url:
         return sources
 
-    post_html = cf_get(post_url, timeout=10)
+    post_html = await async_cf_get(post_url, timeout=10)
     if not post_html:
         return sources
 
@@ -137,7 +139,7 @@ def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
 
         if any(x in href for x in ["hubcloud", "gdflix"]):
             if "gdflix" in href:
-                gdflix_resolved = resolve_gdflix(href, quality=quality, referer=post_url)
+                gdflix_resolved = await loop.run_in_executor(None, lambda: resolve_gdflix(href, quality=quality, referer=post_url))
                 if gdflix_resolved:
                     for g in gdflix_resolved:
                         sources.append(g)
@@ -149,7 +151,7 @@ def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
                         "format": "mkv" if "mkv" in text.lower() else "mp4",
                     })
             else:
-                resolved = extract_hubcloud(href, quality=quality, referer=post_url)
+                resolved = await loop.run_in_executor(None, lambda: extract_hubcloud(href, quality=quality, referer=post_url))
                 if resolved:
                     for r in resolved:
                         sources.append(r)
@@ -162,7 +164,7 @@ def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
                     })
         elif any(x in href for x in ["hubdrive", "filepress"]):
             if "hubdrive" in href:
-                hub_resolved = resolve_hubdrive(href)
+                hub_resolved = await loop.run_in_executor(None, lambda: resolve_hubdrive(href))
                 if hub_resolved:
                     for hr in hub_resolved:
                         sources.append(hr)

@@ -1,16 +1,16 @@
 import re
 from bs4 import BeautifulSoup
-from client import cf_get
+from client import async_cf_get
 from providers.auto_resolver import title_matches_search
 
 SOUTHFREAK_DOMAINS = ["https://southfreak.fyi", "https://southfreak.me"]
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
 
 
-def _search(title: str) -> list[dict]:
+async def _search(title: str) -> list[dict]:
     for BASE in SOUTHFREAK_DOMAINS:
         url = f"{BASE}/?s={title}"
-        html = cf_get(url, headers={"Referer": BASE, "User-Agent": UA}, timeout=10)
+        html = await async_cf_get(url, headers={"Referer": BASE, "User-Agent": UA}, timeout=10)
         if not html:
             continue
 
@@ -79,8 +79,8 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
     return sources
 
 
-def southfreak(title: str, tmdb_id: str = "", year: str = "", media_type: str = "") -> list[dict]:
-    results = _search(title)
+async def southfreak(title: str, tmdb_id: str = "", year: str = "", media_type: str = "") -> list[dict]:
+    results = await _search(title)
     if not results:
         return []
 
@@ -100,7 +100,7 @@ def southfreak(title: str, tmdb_id: str = "", year: str = "", media_type: str = 
     if not best:
         return []
 
-    html = cf_get(best["url"], headers={"Referer": best["url"], "User-Agent": UA}, timeout=10)
+    html = await async_cf_get(best["url"], headers={"Referer": best["url"], "User-Agent": UA}, timeout=10)
     if not html:
         return []
 
