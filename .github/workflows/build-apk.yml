@@ -35,7 +35,7 @@ jobs:
           java-version: '17'
 
       - name: Build APK with Flet
-        run: flet build apk --project cinepix_server --org com.cinepix.server main_app.py
+        run: flet build apk . --project cinepix_server --org com.cinepix.server
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
