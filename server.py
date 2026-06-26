@@ -1605,11 +1605,47 @@ async def proxy_url(url: str, referer: str = None):
         headers = {}
         if referer:
             headers["Referer"] = referer
-        html = await async_cf_get(url, headers=headers, timeout=15)
+
+        html = None
+
+        # Strategy 1: curl_cffi (Chrome impersonation)
+        try:
+            html = await async_cf_get(url, headers=headers, timeout=15)
+        except Exception:
+            pass
+
+        # Strategy 2: httpx fallback
         if not html:
-            raise HTTPException(status_code=404, detail="Failed to fetch URL")
+            try:
+                import httpx
+                h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"}
+                h.update(headers)
+                async with httpx.AsyncClient(follow_redirects=True, timeout=15, http2=True) as client:
+                    r = await client.get(url, headers=h)
+                    if r.status_code == 200:
+                        html = r.text
+            except Exception:
+                pass
+
+        # Strategy 3: corsproxy.io as last resort
+        if not html:
+            try:
+                import httpx, urllib.parse
+                proxy_url_fallback = f"https://corsproxy.io/?url={urllib.parse.quote(url)}"
+                async with httpx.AsyncClient(follow_redirects=True, timeout=12) as client:
+                    r = await client.get(proxy_url_fallback)
+                    if r.status_code == 200:
+                        html = r.text
+            except Exception:
+                pass
+
+        if not html:
+            raise HTTPException(status_code=404, detail="Failed to fetch URL from all strategies")
+
         mem_cache_set(url, html)
         return HTMLResponse(content=html)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
