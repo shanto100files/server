@@ -56,8 +56,10 @@ def follow_cffi(url: str, timeout: int = 10) -> tuple[str, str]:
         return url, ""
 
 
-def discover_deep(urls: list[str]) -> dict:
+def discover_deep(urls: list[str] = None) -> dict:
     """Deep discovery - follow link protectors to find actual domains."""
+    if urls is None:
+        urls = PROVIDER_POSTS
     found = {name: set() for name, _ in KNOWN_PATTERNS}
     seen = set()
 
