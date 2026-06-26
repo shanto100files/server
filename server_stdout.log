@@ -1,0 +1,14 @@
+==================================================
+  CinePix Server v3.3 (SMART OVERLOAD)
+  Performance: SMART MODE + TIMEOUTS
+  Workers: 30 threads, Semaphore: 15
+  Connections: 30 concurrent, HTTP/2
+  Provider Timeout: 20s, Overload: 3 fast-only
+  Memory Cache: 1000 entries (10min TTL, OrderedDict LRU)
+  Rate Limit: 60 req/min per IP
+  Providers: HDHub4U, 4KHDHub, CineFreak, MLSBD, SouthFreak, BollyFlix, VegaMovies
+  Anime: animedubhindi.cc + HubCloud/GDFlix resolvers
+==================================================
+[Cache] Redis connected: redis://default:4TVVoMk4DuueGG...
+[DomainDiscovery] Error: discover_deep() missing 1 required positional argument: 'urls'
+INFO:     127.0.0.1:51667 - "GET /v1/movies/550/sources/stream?type=movie&title=Fight+Club&year=1999 HTTP/1.1" 200 OK
