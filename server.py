@@ -749,9 +749,12 @@ async def admin_dashboard(request: Request):
     if not verify_admin_token(token):
         raise HTTPException(status_code=401, detail="Unauthorized")
     
-    import psutil
-    process = psutil.Process(os.getpid())
-    mem_mb = round(process.memory_info().rss / 1024 / 1024, 1)
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        mem_mb = round(process.memory_info().rss / 1024 / 1024, 1)
+    except ImportError:
+        mem_mb = 0.0
     
     stats = await cache_stats()
     domain_status = get_all_status()
@@ -1344,8 +1347,6 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
     
             done_count = 0
             pending = set(future_map.keys())
-            active_requests = getattr(server, '_active_requests', 0)
-            overload = active_requests > 10
 
             while pending:
                 done_set, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
