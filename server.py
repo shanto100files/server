@@ -1586,6 +1586,90 @@ async def anime_episodes(url: str = Query(...)):
     data = await asyncio.get_event_loop().run_in_executor(executor, lambda: anime_provider.info(url))
     return {"episodes": data.get("episodes", []), "is_movie": data.get("is_movie", False), "sources": data.get("sources", [])}
 
+@app.get("/resolve/fastdl")
+async def resolve_fastdl(url: str, quality: str = "HD"):
+    """Server-side resolver: fastdlserver → gdflix → direct download links"""
+    import re, urllib.parse
+
+    cache_key = f"fastdl:{url}"
+    cached = mem_cache_get(cache_key)
+    if cached:
+        return {"sources": cached, "cached": True}
+
+    results = []
+
+    async def fetch(u, ref=None):
+        h = {}
+        if ref: h["Referer"] = ref
+        return await async_cf_get(u, headers=h, timeout=15)
+
+    # Step 1: fetch fastdlserver page
+    html = await fetch(url, url)
+    if not html:
+        return {"sources": [], "error": "Failed to fetch fastdlserver page"}
+
+    # Step 2: extract redirect to gdflix
+    gdflix_url = None
+    for pat in [
+        r'window\.location\s*=\s*["\']([^"\']+gdflix[^"\']*)["\']',
+        r'href=["\']([^"\']*gdflix[^"\']*)["\']',
+        r'"(https?://[^"]*gdflix[^"]*)"',
+        r"'(https?://[^']*gdflix[^']*)'",
+    ]:
+        m = re.search(pat, html, re.IGNORECASE)
+        if m:
+            gdflix_url = m.group(1).replace("&amp;", "&")
+            break
+
+    if not gdflix_url:
+        return {"sources": [], "error": "No gdflix URL found in fastdlserver page"}
+
+    # Step 3: fetch gdflix page
+    gdflix_html = await fetch(gdflix_url, gdflix_url)
+    if not gdflix_html:
+        return {"sources": [], "error": "Failed to fetch gdflix page"}
+
+    # Step 4: extract direct links from gdflix
+    direct_patterns = [
+        r'href=["\']([^"\']*(?:r2\.dev|pixeldrain\.com|googleusercontent\.com)[^"\']*)["\']',
+        r'"(https?://[^"]*(?:r2\.dev|pixeldrain\.com|video-downloads\.googleusercontent\.com)[^"]*)"',
+    ]
+    seen = set()
+    for pat in direct_patterns:
+        for m in re.finditer(pat, gdflix_html, re.IGNORECASE):
+            link = m.group(1).replace("&amp;", "&")
+            if link not in seen:
+                seen.add(link)
+                fmt = "mp4" if ".mp4" in link.lower() else "mkv"
+                results.append({"url": link, "quality": quality, "format": fmt})
+
+    # Step 5: try gdflix key-based POST for direct URL
+    key_match = re.search(r'"key"\s*[,:]\s*"([^"]+)"', gdflix_html)
+    if key_match and not results:
+        try:
+            from urllib.parse import urlparse
+            key = key_match.group(1)
+            host = urlparse(gdflix_url).hostname
+            from client import async_cf_post
+            import json as _json
+            post_data = f"action=direct&key={key}&action_token="
+            post_headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "x-token": host,
+                "Referer": gdflix_url,
+            }
+            resp = await async_cf_post(gdflix_url, data=post_data, headers=post_headers)
+            if resp:
+                data = _json.loads(resp.text) if hasattr(resp, 'text') else {}
+                direct = data.get("url") or data.get("visit_url")
+                if direct:
+                    results.append({"url": direct, "quality": quality, "format": "mkv"})
+        except Exception:
+            pass
+
+    mem_cache_set(cache_key, results)
+    return {"sources": results, "gdflix_url": gdflix_url}
+
 @app.get("/proxy")
 async def proxy_url(url: str, referer: str = None):
     cached = mem_cache_get(url)
