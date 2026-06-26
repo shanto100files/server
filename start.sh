@@ -15,7 +15,7 @@ echo "=========================================="
 
 # Start Cloudflare Tunnel in background
 echo "[+] Starting Cloudflare Tunnel..."
-cloudflared tunnel --no-autoupdate run 0f35b3b4-769c-437c-9ef7-ac284e84951b &
+cloudflared tunnel --no-autoupdate run --token eyJhIjoiNjAwNmEyOGYzMzYyYTEwYzJiZmYzZDE5NzA0MTQ5OGYiLCJ0IjoiMGYzNWIzYjQtNzY5Yy00MzdjLTllZjctYWMyODRlODQ5NTFiIiwicyI6IlptVXlOamt6Wm1RdE5tTTVaQzAwT0RFNExUZzRabVl0T1RNME9EUmhPRE0zTVRSaiJ9 &
 TUNNEL_PID=$!
 
 # 2. Background Auto-Deploy Poller
