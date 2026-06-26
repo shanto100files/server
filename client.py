@@ -22,31 +22,60 @@ _httpx_client = httpx.Client(
     http2=True,
 )
 
+import threading
+from urllib.parse import urlparse
+import time
+
 _PROXIES = []
 _proxy_file = os.path.join(os.path.dirname(__file__), "proxies.txt")
-if os.path.exists(_proxy_file):
-    with open(_proxy_file, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#"):
-                _PROXIES.append({"http": line, "https": line})
+
+def _load_proxies():
+    global _PROXIES
+    if os.path.exists(_proxy_file):
+        with open(_proxy_file, "r") as f:
+            lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+            _PROXIES = [{"http": p, "https": p} for p in lines]
+
+_load_proxies()
+
+def _fetch_free_proxies():
+    try:
+        r = httpx.get("https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt", timeout=10)
+        if r.status_code == 200:
+            lines = r.text.split("\n")[:100] # Take top 100
+            with open(_proxy_file, "w") as f:
+                f.write("\n".join(lines))
+            _load_proxies()
+    except:
+        pass
+
+# Run proxy fetch in background once
+threading.Thread(target=_fetch_free_proxies, daemon=True).start()
 
 _IMPERSONATES = ["chrome110", "chrome116", "chrome120", "edge101", "safari15_3"]
 
-_cffi_sessions = []
-_cffi_async_sessions = []
+_domain_sync_sessions = {}
+_domain_async_sessions = {}
+_session_lock = threading.Lock()
 
-for imp in _IMPERSONATES:
-    for proxy in (_PROXIES if _PROXIES else [None]):
-        _cffi_sessions.append(cffi_requests.Session(impersonate=imp, proxies=proxy))
-        _cffi_async_sessions.append(cffi_requests.AsyncSession(impersonate=imp, proxies=proxy))
+def _get_proxy():
+    return random.choice(_PROXIES) if _PROXIES else None
 
-def _get_sync_session():
-    return random.choice(_cffi_sessions)
+def _get_sync_session(url: str):
+    domain = urlparse(url).netloc
+    with _session_lock:
+        if domain not in _domain_sync_sessions:
+            imp = random.choice(_IMPERSONATES)
+            _domain_sync_sessions[domain] = cffi_requests.Session(impersonate=imp, proxies=_get_proxy())
+        return _domain_sync_sessions[domain]
 
-def _get_async_session():
-    return random.choice(_cffi_async_sessions)
-
+def _get_async_session(url: str):
+    domain = urlparse(url).netloc
+    with _session_lock:
+        if domain not in _domain_async_sessions:
+            imp = random.choice(_IMPERSONATES)
+            _domain_async_sessions[domain] = cffi_requests.AsyncSession(impersonate=imp, proxies=_get_proxy())
+        return _domain_async_sessions[domain]
 
 def http_get(url: str, headers: dict = None, timeout: int = 10, retries: int = 2) -> httpx.Response | None:
     for attempt in range(retries):
@@ -56,10 +85,8 @@ def http_get(url: str, headers: dict = None, timeout: int = 10, retries: int = 2
                 return r
         except Exception:
             if attempt < retries - 1:
-                import time
                 time.sleep(0.15 * (attempt + 1))
     return None
-
 
 def http_post(url: str, content: str = "", headers: dict = None, timeout: int = 10) -> httpx.Response | None:
     try:
@@ -69,28 +96,31 @@ def http_post(url: str, content: str = "", headers: dict = None, timeout: int = 
         pass
     return None
 
-
 def cf_get(url: str, headers: dict = None, timeout: int = 10, retries: int = 3) -> str | None:
     for attempt in range(retries):
         try:
             h = {"User-Agent": _UA}
             if headers:
                 h.update(headers)
-            r = _get_sync_session().get(url, headers=h, timeout=timeout)
+            r = _get_sync_session(url).get(url, headers=h, timeout=timeout)
             if r.status_code in (200, 404):
                 if r.status_code == 200:
                     return r.text
                 return None
             
-            if r.status_code in (403, 429) and attempt < retries - 1:
-                import time
-                time.sleep(1.0 * (attempt + 1))
+            if r.status_code in (403, 429):
+                with _session_lock: # Reset session on ban
+                    domain = urlparse(url).netloc
+                    _domain_sync_sessions.pop(domain, None)
+                if attempt < retries - 1:
+                    time.sleep(1.0 * (attempt + 1))
         except Exception:
+            with _session_lock:
+                domain = urlparse(url).netloc
+                _domain_sync_sessions.pop(domain, None)
             if attempt < retries - 1:
-                import time
                 time.sleep(1.0 * (attempt + 1))
     return None
-
 
 def cf_post(url: str, data: str = "", headers: dict = None, timeout: int = 10, retries: int = 2) -> httpx.Response | None:
     for attempt in range(retries):
@@ -98,15 +128,20 @@ def cf_post(url: str, data: str = "", headers: dict = None, timeout: int = 10, r
             h = {"User-Agent": _UA}
             if headers:
                 h.update(headers)
-            r = _get_sync_session().post(url, data=data, headers=h, timeout=timeout)
+            r = _get_sync_session(url).post(url, data=data, headers=h, timeout=timeout)
             if r.status_code == 200:
                 return r
+            if r.status_code in (403, 429):
+                with _session_lock:
+                    domain = urlparse(url).netloc
+                    _domain_sync_sessions.pop(domain, None)
         except Exception:
+            with _session_lock:
+                domain = urlparse(url).netloc
+                _domain_sync_sessions.pop(domain, None)
             if attempt < retries - 1:
-                import time
                 time.sleep(1.0 * (attempt + 1))
     return None
-
 
 async def async_cf_get(url: str, headers: dict = None, timeout: int = 10, retries: int = 3) -> str | None:
     for attempt in range(retries):
@@ -114,19 +149,25 @@ async def async_cf_get(url: str, headers: dict = None, timeout: int = 10, retrie
             h = {"User-Agent": _UA}
             if headers:
                 h.update(headers)
-            r = await _get_async_session().get(url, headers=h, timeout=timeout)
+            r = await _get_async_session(url).get(url, headers=h, timeout=timeout)
             if r.status_code in (200, 404):
                 if r.status_code == 200:
                     return r.text
                 return None
 
-            if r.status_code in (403, 429) and attempt < retries - 1:
-                await asyncio.sleep(1.0 * (attempt + 1))
+            if r.status_code in (403, 429):
+                with _session_lock:
+                    domain = urlparse(url).netloc
+                    _domain_async_sessions.pop(domain, None)
+                if attempt < retries - 1:
+                    await asyncio.sleep(1.0 * (attempt + 1))
         except Exception:
+            with _session_lock:
+                domain = urlparse(url).netloc
+                _domain_async_sessions.pop(domain, None)
             if attempt < retries - 1:
                 await asyncio.sleep(1.0 * (attempt + 1))
     return None
-
 
 async def async_cf_post(url: str, data: str = "", headers: dict = None, timeout: int = 10, retries: int = 2):
     for attempt in range(retries):
@@ -134,10 +175,17 @@ async def async_cf_post(url: str, data: str = "", headers: dict = None, timeout:
             h = {"User-Agent": _UA}
             if headers:
                 h.update(headers)
-            r = await _get_async_session().post(url, data=data, headers=h, timeout=timeout)
+            r = await _get_async_session(url).post(url, data=data, headers=h, timeout=timeout)
             if r.status_code == 200:
                 return r
+            if r.status_code in (403, 429):
+                with _session_lock:
+                    domain = urlparse(url).netloc
+                    _domain_async_sessions.pop(domain, None)
         except Exception:
+            with _session_lock:
+                domain = urlparse(url).netloc
+                _domain_async_sessions.pop(domain, None)
             if attempt < retries - 1:
                 await asyncio.sleep(1.0 * (attempt + 1))
     return None
@@ -145,16 +193,18 @@ async def async_cf_post(url: str, data: str = "", headers: dict = None, timeout:
 
 def close():
     _httpx_client.close()
-    for s in _cffi_sessions:
-        s.close()
-    
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            for s in _cffi_async_sessions:
-                loop.create_task(s.close())
-        else:
-            for s in _cffi_async_sessions:
-                loop.run_until_complete(s.close())
-    except:
-        pass
+    with _session_lock:
+        for s in _domain_sync_sessions.values():
+            try: s.close()
+            except: pass
+        
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                for s in _domain_async_sessions.values():
+                    loop.create_task(s.close())
+            else:
+                for s in _domain_async_sessions.values():
+                    loop.run_until_complete(s.close())
+        except:
+            pass

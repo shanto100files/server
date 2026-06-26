@@ -1277,6 +1277,28 @@ _LANG_MAP = {
     "dual audio": "Dual Audio", "multi": "Multi Audio",
     "original": "Original",
 }
+import difflib
+import re as _re_fuzzy
+
+def is_fuzzy_match(search_title: str, source_title: str) -> bool:
+    if not search_title or not source_title:
+        return True
+    
+    s_clean = _re_fuzzy.sub(r'[^a-z0-9]', '', search_title.lower())
+    t_clean = _re_fuzzy.sub(r'[^a-z0-9]', '', source_title.lower())
+    
+    if not s_clean or not t_clean:
+        return True
+        
+    if s_clean in t_clean:
+        return True
+        
+    seq = difflib.SequenceMatcher(None, s_clean, t_clean)
+    match = seq.find_longest_match(0, len(s_clean), 0, len(t_clean))
+    
+    if match.size >= len(s_clean) * 0.8:
+        return True
+    return False
 
 def _enrich_source(s: dict):
     url = s.get("url", "").lower()
@@ -1355,9 +1377,12 @@ async def sources(tmdb_id: str, type: str = "movie", title: str = "", season: in
             for s in new_sources:
                 url = s.get("url", "").split("?")[0].rstrip("/")
                 if url not in seen_urls:
-                    seen_urls.add(url)
-                    _enrich_source(s)
-                    unique_new.append(s)
+                    # Fuzzy Match Check
+                    s_title = s.get("title") or s.get("name") or ""
+                    if is_fuzzy_match(title, s_title):
+                        seen_urls.add(url)
+                        _enrich_source(s)
+                        unique_new.append(s)
             collected_sources.extend(unique_new)
             if len(collected_sources) >= EARLY_EXIT_THRESHOLD:
                 enough.set()
@@ -1499,10 +1524,12 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
                     for s in result:
                         url = s.get("url", "").split("?")[0].rstrip("/")
                         if url not in seen_urls:
-                            seen_urls.add(url)
-                            _enrich_source(s)
-                            new_sources.append(s)
-                            count += 1
+                            s_title = s.get("title") or s.get("name") or ""
+                            if is_fuzzy_match(title, s_title):
+                                seen_urls.add(url)
+                                _enrich_source(s)
+                                new_sources.append(s)
+                                count += 1
 
                 if count >= 10:
                     enough = True
