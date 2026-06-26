@@ -11,11 +11,11 @@ from curl_cffi import requests as cffi_requests
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 _httpx_client = httpx.Client(
-    timeout=httpx.Timeout(10.0),
+    timeout=httpx.Timeout(8.0),
     limits=httpx.Limits(
-        max_connections=60,
-        max_keepalive_connections=30,
-        keepalive_expiry=60,
+        max_connections=30,
+        max_keepalive_connections=15,
+        keepalive_expiry=30,
     ),
     follow_redirects=True,
     headers={"User-Agent": _UA},

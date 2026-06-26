@@ -37,8 +37,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=50)
-_provider_semaphore = asyncio.Semaphore(35)
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=30)
+_provider_semaphore = asyncio.Semaphore(15)
+_active_streams = 0
+_streams_lock = threading.Lock()
 
 _mem_cache = OrderedDict()
 _mem_cache_ttl = 600
@@ -1165,18 +1167,25 @@ async def sources(tmdb_id: str, type: str = "movie", title: str = "", season: in
     all_sources = []
     year = ""
     EARLY_EXIT_THRESHOLD = 10
-    PROVIDER_TIMEOUT = 45.0
+    PROVIDER_TIMEOUT = 20.0
+    overload = _active_streams > 8
 
-    # Priority order: fastest providers first
-    tasks = [
-        ("cinefreak", cinefreak, (tmdb_id, type, title, season, episode)),
-        ("hdhub4u", hdhub4u, (title, tmdb_id)),
-        ("mlsbd", mlsbd, (title, tmdb_id)),
-        ("southfreak", southfreak, (title, tmdb_id)),
-        ("bollyflix", bollyflix, (title, tmdb_id)),
-        ("vegamovies", vegamovies, (title, tmdb_id, season, episode, year, type)),
-        ("4khdhub", fourkhd, (title, tmdb_id)),
-    ]
+    if overload:
+        tasks = [
+            ("hdhub4u", hdhub4u, (title, tmdb_id)),
+            ("4khdhub", fourkhd, (title, tmdb_id)),
+            ("cinefreak", cinefreak, (tmdb_id, type, title, season, episode)),
+        ]
+    else:
+        tasks = [
+            ("cinefreak", cinefreak, (tmdb_id, type, title, season, episode)),
+            ("hdhub4u", hdhub4u, (title, tmdb_id)),
+            ("mlsbd", mlsbd, (title, tmdb_id)),
+            ("southfreak", southfreak, (title, tmdb_id)),
+            ("bollyflix", bollyflix, (title, tmdb_id)),
+            ("vegamovies", vegamovies, (title, tmdb_id, season, episode, year, type)),
+            ("4khdhub", fourkhd, (title, tmdb_id)),
+        ]
 
     collected_sources = []
     seen_urls = set()
@@ -1269,21 +1278,32 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
     set_inflight(cache_key, dedup_event)
 
     async def event_generator():
+        global _active_streams
         try:
+            _active_streams += 1
+            overload = _active_streams > 8
+
             loop = asyncio.get_event_loop()
             seen_urls = set()
             count = 0
             chunks = []
     
-            tasks = [
-                ("HDHub4U", hdhub4u, (title, tmdb_id)),
-                ("4KHDHub", fourkhd, (title, tmdb_id)),
-                ("CineFreak", cinefreak, (tmdb_id, type, title, season, episode)),
-                ("MLSBD", mlsbd, (title, tmdb_id, season, episode, year, type)),
-                ("SouthFreak", southfreak, (title, tmdb_id, year, type)),
-                ("BollyFlix", bollyflix, (title, tmdb_id, year, type)),
-                ("VegaMovies", vegamovies, (title, tmdb_id, season, episode, year, type)),
-            ]
+            if overload:
+                tasks = [
+                    ("HDHub4U", hdhub4u, (title, tmdb_id)),
+                    ("4KHDHub", fourkhd, (title, tmdb_id)),
+                    ("CineFreak", cinefreak, (tmdb_id, type, title, season, episode)),
+                ]
+            else:
+                tasks = [
+                    ("HDHub4U", hdhub4u, (title, tmdb_id)),
+                    ("4KHDHub", fourkhd, (title, tmdb_id)),
+                    ("CineFreak", cinefreak, (tmdb_id, type, title, season, episode)),
+                    ("MLSBD", mlsbd, (title, tmdb_id, season, episode, year, type)),
+                    ("SouthFreak", southfreak, (title, tmdb_id, year, type)),
+                    ("BollyFlix", bollyflix, (title, tmdb_id, year, type)),
+                    ("VegaMovies", vegamovies, (title, tmdb_id, season, episode, year, type)),
+                ]
     
             total = len(tasks)
             provider_times = {}
@@ -1297,7 +1317,11 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
                 try:
                     async with _provider_semaphore:
                         if inspect.iscoroutinefunction(func):
-                            result = await func(*args)
+                            coro = func(*args)
+                            try:
+                                result = await asyncio.wait_for(coro, timeout=20)
+                            except asyncio.TimeoutError:
+                                result = []
                         else:
                             result = await loop.run_in_executor(executor, lambda: func(*args))
                     duration = time.time() - t0
@@ -1320,13 +1344,15 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
     
             done_count = 0
             pending = set(future_map.keys())
-    
+            active_requests = getattr(server, '_active_requests', 0)
+            overload = active_requests > 10
+
             while pending:
                 done_set, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                 for fut in done_set:
                     done_count += 1
                     name, result = fut.result()
-    
+
                     new_sources = []
                     for s in result:
                         url = s.get("url", "").split("?")[0].rstrip("/")
@@ -1335,13 +1361,13 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
                             _enrich_source(s)
                             new_sources.append(s)
                             count += 1
-    
-                    if count >= 15:
-                        enough = True
-    
-                    chunk = f"data: {_json.dumps({'type': 'provider_done', 'name': name, 'sources': new_sources, 'count': len(new_sources), 'done': done_count, 'total': total})}\n\n"
-                    chunks.append(chunk)
-                    yield chunk
+
+                if count >= 10:
+                    enough = True
+
+                chunk = f"data: {_json.dumps({'type': 'provider_done', 'name': name, 'sources': new_sources, 'count': len(new_sources), 'done': done_count, 'total': total})}\n\n"
+                chunks.append(chunk)
+                yield chunk
     
             done_chunk = f"data: {_json.dumps({'type': 'done', 'total_sources': count, 'provider_times': provider_times})}\n\n"
             chunks.append(done_chunk)
@@ -1349,6 +1375,7 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
     
             mem_cache_set(cache_key, chunks)
         finally:
+            _active_streams -= 1
             dedup_event.set()
             remove_inflight(cache_key)
 
@@ -1393,14 +1420,14 @@ if __name__ == "__main__":
     import uvicorn
 
     print("=" * 50)
-    print("  CinePix Server v3.1 (OPTIMIZED)")
-    print("  Performance: MAXIMUM POWER")
-    print("  Workers: 50 threads (optimized)")
-    print("  Connections: 60 concurrent, HTTP/2")
-    print("  Semaphore: 20 (provider throttle)")
+    print("  CinePix Server v3.3 (SMART OVERLOAD)")
+    print("  Performance: SMART MODE + TIMEOUTS")
+    print("  Workers: 30 threads, Semaphore: 15")
+    print("  Connections: 30 concurrent, HTTP/2")
+    print("  Provider Timeout: 20s, Overload: 3 fast-only")
     print("  Memory Cache: 1000 entries (10min TTL, OrderedDict LRU)")
     print("  Rate Limit: 60 req/min per IP")
-    print("  Providers: CineFreak, HDHub4U, MLSBD, SouthFreak, BollyFlix")
+    print("  Providers: HDHub4U, 4KHDHub, CineFreak, MLSBD, SouthFreak, BollyFlix, VegaMovies")
     print("  Anime: animedubhindi.cc + HubCloud/GDFlix resolvers")
     print("=" * 50)
     uvicorn.run(app, host="0.0.0.0", port=8000)
