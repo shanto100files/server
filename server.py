@@ -1670,6 +1670,26 @@ async def resolve_fastdl(url: str, quality: str = "HD"):
     mem_cache_set(cache_key, results)
     return {"sources": results, "gdflix_url": gdflix_url}
 
+@app.get("/resolve")
+async def resolve_link(url: str, quality: str = "HD"):
+    """Universal resolver: any intermediate link → direct streamable link"""
+    cache_key = f"resolve:{url}"
+    cached = mem_cache_get(cache_key)
+    if cached:
+        return {"sources": cached, "cached": True}
+
+    loop = asyncio.get_event_loop()
+    try:
+        results = await loop.run_in_executor(
+            executor,
+            lambda: auto_resolver.resolve_any(url, quality=quality)
+        )
+    except Exception as e:
+        return {"sources": [], "error": str(e)}
+
+    mem_cache_set(cache_key, results)
+    return {"sources": results, "count": len(results)}
+
 @app.get("/proxy")
 async def proxy_url(url: str, referer: str = None):
     cached = mem_cache_get(url)
