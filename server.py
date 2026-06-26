@@ -26,6 +26,7 @@ from providers.domain_discovery import discover_deep
 from providers.domain_health import check_all_domains, get_all_status
 import providers.auto_resolver as auto_resolver
 from providers import anime as anime_provider
+from client import async_cf_get
 
 
 app = FastAPI(title="CinePix Server", version="3.1")
@@ -1571,6 +1572,201 @@ async def anime_home():
 
 @app.get("/api/anime/info")
 async def anime_info(url: str = Query(...)):
+                if url not in seen_urls:
+                    # Fuzzy Match Check
+                    s_title = s.get("title") or s.get("name") or ""
+                    if is_fuzzy_match(title, s_title):
+                        seen_urls.add(url)
+                        _enrich_source(s)
+                        unique_new.append(s)
+            collected_sources.extend(unique_new)
+            if len(collected_sources) >= EARLY_EXIT_THRESHOLD:
+                enough.set()
+            return unique_new
+        except asyncio.TimeoutError:
+            return []
+        except Exception:
+            return []
+
+    provider_futures = [asyncio.ensure_future(run_provider(n, f, a)) for n, f, a in tasks]
+    await asyncio.gather(*provider_futures, return_exceptions=True)
+
+    # Cancel any remaining tasks if early exit triggered
+    for fut in provider_futures:
+        if not fut.done():
+            fut.cancel()
+
+    unique_sources = collected_sources
+
+    result = {
+        "sources": unique_sources,
+        "count": len(unique_sources),
+        "tmdb_id": tmdb_id,
+        "title": title,
+        "early_exit": enough.is_set(),
+    }
+
+    await cache_set(cache_key, result, "sources")
+    mem_cache_set(f"api:{cache_key}", result)
+    return result
+
+@app.get("/v1/movies/{tmdb_id}/sources/stream")
+async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", season: int = 0, episode: int = 0, year: str = "", request: Request = None):
+    from fastapi.responses import StreamingResponse
+    import json as _json
+
+    client_ip = request.client.host if request else "unknown"
+    if not check_rate_limit(client_ip):
+        async def rate_limited():
+            yield f"data: {_json.dumps({'type': 'done', 'total_sources': 0, 'error': 'rate_limited'})}\n\n"
+        return StreamingResponse(rate_limited(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keepalive", "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"})
+
+    cache_key = f"stream:{tmdb_id}:{type}:{title}:s{season}:e{episode}"
+    cached = mem_cache_get(cache_key)
+    if cached:
+        async def cached_stream():
+            for chunk in cached:
+                yield chunk
+        return StreamingResponse(cached_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keepalive", "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"})
+
+    inflight_event = get_inflight(cache_key)
+    if inflight_event:
+        await inflight_event.wait()
+        cached2 = mem_cache_get(cache_key)
+        if cached2:
+            async def cached_stream2():
+                for chunk in cached2:
+                    yield chunk
+            return StreamingResponse(cached_stream2(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keepalive", "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"})
+
+    dedup_event = asyncio.Event()
+    set_inflight(cache_key, dedup_event)
+
+    async def event_generator():
+        global _active_streams
+        try:
+            _active_streams += 1
+            overload = _active_streams > 8
+
+            loop = asyncio.get_event_loop()
+            seen_urls = set()
+            count = 0
+            chunks = []
+    
+            if overload:
+                tasks = [
+                    ("HDHub4U", hdhub4u, (title, tmdb_id)),
+                    ("4KHDHub", fourkhd, (title, tmdb_id)),
+                    ("CineFreak", cinefreak, (tmdb_id, type, title, season, episode)),
+                ]
+            else:
+                tasks = [
+                    ("HDHub4U", hdhub4u, (title, tmdb_id)),
+                    ("4KHDHub", fourkhd, (title, tmdb_id)),
+                    ("CineFreak", cinefreak, (tmdb_id, type, title, season, episode)),
+                    ("MLSBD", mlsbd, (title, tmdb_id, season, episode, year, type)),
+                    ("SouthFreak", southfreak, (title, tmdb_id, year, type)),
+                    ("BollyFlix", bollyflix, (title, tmdb_id, year, type)),
+                    ("VegaMovies", vegamovies, (title, tmdb_id, season, episode, year, type)),
+                ]
+    
+            total = len(tasks)
+            provider_times = {}
+            enough = False
+    
+            async def run_one(name, func, args):
+                nonlocal enough
+                if enough:
+                    return name, []
+                t0 = time.time()
+                try:
+                    async with _provider_semaphore:
+                        if inspect.iscoroutinefunction(func):
+                            coro = func(*args)
+                            try:
+                                result = await asyncio.wait_for(coro, timeout=20)
+                            except asyncio.TimeoutError:
+                                result = []
+                        else:
+                            result = await loop.run_in_executor(executor, lambda: func(*args))
+                    duration = time.time() - t0
+                    provider_times[name] = round(duration, 2)
+                    record_provider(name, bool(result), duration)
+                    return name, result or []
+                except Exception as e:
+                    duration = time.time() - t0
+                    provider_times[name] = round(duration, 2)
+                    record_provider(name, False, duration)
+                    return name, []
+    
+            future_map = {}
+            for name, func, args in tasks:
+                fut = asyncio.ensure_future(run_one(name, func, args))
+                future_map[fut] = name
+                chunk = f"data: {_json.dumps({'type': 'provider_start', 'name': name})}\n\n"
+                chunks.append(chunk)
+                yield chunk
+    
+            done_count = 0
+            pending = set(future_map.keys())
+
+            while pending:
+                done_set, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for fut in done_set:
+                    done_count += 1
+                    name, result = fut.result()
+
+                    new_sources = []
+                    for s in result:
+                        url = s.get("url", "").split("?")[0].rstrip("/")
+                        if url not in seen_urls:
+                            s_title = s.get("title") or s.get("name") or ""
+                            if is_fuzzy_match(title, s_title):
+                                seen_urls.add(url)
+                                _enrich_source(s)
+                                new_sources.append(s)
+                                count += 1
+
+                if count >= 10:
+                    enough = True
+
+                chunk = f"data: {_json.dumps({'type': 'provider_done', 'name': name, 'sources': new_sources, 'count': len(new_sources), 'done': done_count, 'total': total})}\n\n"
+                chunks.append(chunk)
+                yield chunk
+    
+            done_chunk = f"data: {_json.dumps({'type': 'done', 'total_sources': count, 'provider_times': provider_times})}\n\n"
+            chunks.append(done_chunk)
+            yield done_chunk
+    
+            mem_cache_set(cache_key, chunks)
+        finally:
+            _active_streams -= 1
+            dedup_event.set()
+            remove_inflight(cache_key)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+@app.get("/api/anime/search")
+async def anime_search(q: str = Query(...)):
+    results = await asyncio.get_event_loop().run_in_executor(executor, lambda: anime_provider.search(q))
+    return {"results": results, "count": len(results)}
+
+@app.get("/api/anime/home")
+async def anime_home():
+    results = await asyncio.get_event_loop().run_in_executor(executor, anime_provider.home)
+    return {"sections": results}
+
+@app.get("/api/anime/info")
+async def anime_info(url: str = Query(...)):
     data = await asyncio.get_event_loop().run_in_executor(executor, lambda: anime_provider.info(url))
     return data
 
@@ -1585,12 +1781,45 @@ async def anime_episodes(url: str = Query(...)):
     data = await asyncio.get_event_loop().run_in_executor(executor, lambda: anime_provider.info(url))
     return {"episodes": data.get("episodes", []), "is_movie": data.get("is_movie", False), "sources": data.get("sources", [])}
 
+@app.get("/proxy")
+async def proxy_url(url: str, referer: str = None):
+    # 1. Check Memory Cache
+    cached = mem_cache_get(url)
+    if cached:
+        return HTMLResponse(content=cached)
+        
+    # 2. Check In-Flight (Deduplication)
+    inflight_event = get_inflight(url)
+    if inflight_event:
+        await asyncio.to_thread(inflight_event.wait, 15)
+        cached = mem_cache_get(url)
+        if cached:
+            return HTMLResponse(content=cached)
+
+    # 3. Fetch from origin
+    event = threading.Event()
+    set_inflight(url, event)
+    try:
+        headers = {}
+        if referer:
+            headers["Referer"] = referer
+            
+        html = await async_cf_get(url, headers=headers, timeout=15)
+        if not html:
+            raise HTTPException(status_code=404, detail="Failed to fetch URL")
+            
+        mem_cache_set(url, html)
+        return HTMLResponse(content=html)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        event.set()
+        remove_inflight(url)
+
 if __name__ == "__main__":
     import uvicorn
-
     print("=" * 50)
     print("  CinePix Server v3.3 (SMART OVERLOAD)")
-    print("  Performance: SMART MODE + TIMEOUTS")
     print("  Workers: 30 threads, Semaphore: 15")
     print("  Connections: 30 concurrent, HTTP/2")
     print("  Provider Timeout: 20s, Overload: 3 fast-only")
@@ -1599,4 +1828,5 @@ if __name__ == "__main__":
     print("  Providers: HDHub4U, 4KHDHub, CineFreak, MLSBD, SouthFreak, BollyFlix, VegaMovies")
     print("  Anime: animedubhindi.cc + HubCloud/GDFlix resolvers")
     print("=" * 50)
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("server:app", host="0.0.0.0", port=port, log_level="warning")

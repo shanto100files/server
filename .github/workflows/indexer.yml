@@ -1,0 +1,47 @@
+name: CinePix Daily Indexer
+
+on:
+  # Run daily at 3:00 AM UTC (9:00 AM Bangladesh time)
+  schedule:
+    - cron: '0 3 * * *'
+
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      max_posts:
+        description: 'Max posts per provider (default: 300)'
+        required: false
+        default: '300'
+      providers:
+        description: 'Providers to run (all / hdhub4u / cinefreak / mlsbd / bollyflix)'
+        required: false
+        default: 'all'
+
+jobs:
+  index:
+    name: Pre-Index Provider Posts
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Indexer
+        working-directory: indexer
+        env:
+          D1_API_URL: ${{ secrets.D1_API_URL }}
+          D1_API_TOKEN: ${{ secrets.D1_API_TOKEN }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          MAX_POSTS: ${{ github.event.inputs.max_posts || '300' }}
+          PROVIDERS: ${{ github.event.inputs.providers || 'all' }}
+        run: node indexer.js
+
+      - name: Report
+        if: always()
+        run: echo "✅ Indexer run completed at $(date -u)"
