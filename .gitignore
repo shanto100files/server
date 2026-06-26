@@ -15,3 +15,11 @@ cncverse_extracted/
 vegamovies_extracted/
 run.sh
 setup.sh
+backup/
+run_logs.txt
+server_stderr.log
+server_stdout.log
+proxies.txt
+load_test.py
+loadtest_50users.py
+loadtest_results.json
