@@ -9,9 +9,14 @@ echo "=========================================="
 echo "[+] Enabling termux-wake-lock..."
 termux-wake-lock
 
-echo "[+] Starting server in Auto-Deploy mode..."
+echo "[+] Starting server and Cloudflare Tunnel in Auto-Deploy mode..."
 echo "[+] Press CTRL+C multiple times quickly to stop completely."
 echo "=========================================="
+
+# Start Cloudflare Tunnel in background
+echo "[+] Starting Cloudflare Tunnel..."
+cloudflared tunnel --no-autoupdate run 0f35b3b4-769c-437c-9ef7-ac284e84951b &
+TUNNEL_PID=$!
 
 # 2. Background Auto-Deploy Poller
 # This loop checks GitHub every 5 minutes. If new code is found, 
@@ -41,8 +46,8 @@ echo "=========================================="
 # Save the poller PID so we can kill it later if needed
 POLLER_PID=$!
 
-# Trap CTRL+C to kill the background poller when the script stops
-trap "echo 'Stopping auto-deploy...'; kill $POLLER_PID 2>/dev/null; exit" SIGINT SIGTERM
+# Trap CTRL+C to kill the background poller and tunnel when the script stops
+trap "echo 'Stopping auto-deploy and tunnel...'; kill $POLLER_PID $TUNNEL_PID 2>/dev/null; exit" SIGINT SIGTERM
 
 # 3. Infinite Loop for Auto-Restart
 while true
