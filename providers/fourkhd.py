@@ -49,7 +49,7 @@ async def _resolve_hubcloud(hub_url):
     if not r:
         return []
     results = []
-    soup = BeautifulSoup(r, "lxml")
+    soup = BeautifulSoup(r, "html.parser")
     for a in soup.find_all("a", href=True):
         h = a["href"]
         t = a.get_text(strip=True)
@@ -73,7 +73,7 @@ async def fourkhd(title, tmdb_id="", season=0, episode=0, year="", media_type=""
     html = await _fetch(f"{domain}/?s={title}", timeout=10)
     if not html:
         return []
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     qw = set(title.lower().split())
     post_url = None
     best_score = 0
@@ -96,7 +96,7 @@ async def fourkhd(title, tmdb_id="", season=0, episode=0, year="", media_type=""
     post_html = await _fetch(domain + post_url, timeout=12)
     if not post_html:
         return []
-    soup = BeautifulSoup(post_html, "lxml")
+    soup = BeautifulSoup(post_html, "html.parser")
     seen = set()
     final = []
     for a in soup.find_all("a", href=True):

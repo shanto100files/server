@@ -29,7 +29,7 @@ async def _resolve_savelinks(url):
 
 def _extract_post_metadata(html: str) -> dict:
     meta = {}
-    text = BeautifulSoup(html, "lxml").get_text()
+    text = BeautifulSoup(html, "html.parser").get_text()
     lang = re.search(r"Language\s*:\s*(\w+)", text)
     if lang:
         meta["language"] = lang.group(1)
@@ -74,7 +74,7 @@ async def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
         html = await _fetch(f"{domain}/?s={title}", headers={"Referer": domain})
         if not html:
             continue
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
 
         post_url = None
 
@@ -106,7 +106,7 @@ async def mlsbd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
             continue
 
         meta = _extract_post_metadata(post_html)
-        post_soup = BeautifulSoup(post_html, "lxml")
+        post_soup = BeautifulSoup(post_html, "html.parser")
         lang = meta.get("language", "")
 
         all_elements = post_soup.select("h2, h3, h4, h5, strong, b, a[href]")

@@ -27,12 +27,12 @@ async def _load_sitemap() -> list[str]:
         index_r = await async_cf_get(f"{_PRIMARY}/sitemap.xml", timeout=12)
         if not index_r:
             return []
-        soup = BeautifulSoup(index_r, "lxml-xml")
+        soup = BeautifulSoup(index_r, "xml.etree.ElementTree")
         post_sitemaps = [loc.text for loc in soup.select("loc") if "post-sitemap" in loc.text]
         for sm_url in post_sitemaps:
             sm_html = await async_cf_get(sm_url, timeout=12)
             if sm_html:
-                sm_soup = BeautifulSoup(sm_html, "lxml-xml")
+                sm_soup = BeautifulSoup(sm_html, "xml.etree.ElementTree")
                 urls.extend(loc.text for loc in sm_soup.select("loc"))
     except Exception:
         pass
@@ -127,7 +127,7 @@ async def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
     if not post_html:
         return sources
 
-    soup = BeautifulSoup(post_html, "lxml")
+    soup = BeautifulSoup(post_html, "html.parser")
 
     for a in soup.select("a[href]"):
         href = a.get("href", "")

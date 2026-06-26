@@ -14,7 +14,7 @@ async def _search(title: str) -> list[dict]:
         if not html:
             continue
 
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         results = []
         seen_urls = set()
 
@@ -38,7 +38,7 @@ async def _search(title: str) -> list[dict]:
 
 
 def _extract_links(html: str, post_url: str = "") -> list[dict]:
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     sources = []
     seen = set()
 

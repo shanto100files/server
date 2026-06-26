@@ -12,7 +12,7 @@ def _soup(url):
     html = cf_get(url, headers={"Referer": BASE, "User-Agent": UA}, timeout=20)
     if not html:
         raise Exception(f"Failed to fetch {url}")
-    return BeautifulSoup(html, "lxml")
+    return BeautifulSoup(html, "html.parser")
 
 def search(query):
     try:

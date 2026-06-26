@@ -16,7 +16,7 @@ def resolve_hubdrive(url: str) -> list[dict]:
     if not html:
         return sources
 
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     meta = {}
 
     title_el = soup.select_one("h6.m-0, .card-header h6, title")
@@ -96,7 +96,7 @@ def resolve_hubdrive(url: str) -> list[dict]:
     if not hc_html:
         return sources
 
-    hc_soup = BeautifulSoup(hc_html, "lxml")
+    hc_soup = BeautifulSoup(hc_html, "html.parser")
     gamerxyt_link = None
     for a in hc_soup.select("a[href*='gamerxyt']"):
         href = a.get("href", "")
@@ -124,7 +124,7 @@ def resolve_hubdrive(url: str) -> list[dict]:
     if not gx_html:
         return sources
 
-    gx_soup = BeautifulSoup(gx_html, "lxml")
+    gx_soup = BeautifulSoup(gx_html, "html.parser")
 
     seen = set()
     for a in gx_soup.select("a[href]"):

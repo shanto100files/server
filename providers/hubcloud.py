@@ -33,7 +33,7 @@ def extract_hubcloud(url: str, quality: str = "", referer: str = "") -> list[dic
             if not page_html:
                 return results
 
-            soup = BeautifulSoup(page_html, "lxml")
+            soup = BeautifulSoup(page_html, "html.parser")
 
             dl_el = soup.select_one("#download")
             if dl_el and dl_el.get("href"):
@@ -58,7 +58,7 @@ def extract_hubcloud(url: str, quality: str = "", referer: str = "") -> list[dic
         if not resp_html:
             return results
 
-        soup = BeautifulSoup(resp_html, "lxml")
+        soup = BeautifulSoup(resp_html, "html.parser")
 
         file_size = ""
         size_el = soup.select_one("i#size")

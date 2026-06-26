@@ -43,7 +43,7 @@ def _search(title: str) -> str | None:
         if not html:
             continue
 
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         for a in soup.select("a[href]"):
             href = a.get("href", "")
             text = a.get_text(strip=True).lower()
@@ -82,7 +82,7 @@ def _resolve_gofile(file_id: str) -> str | None:
 
 def _extract_links(html: str) -> list[dict]:
     sources = []
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
 
     for a in soup.select("a[href]"):
         href = a.get("href", "")

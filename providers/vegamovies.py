@@ -55,7 +55,7 @@ async def _resolve_vcloud(url):
     if not token_html:
         return []
     results = []
-    soup = BeautifulSoup(token_html, "lxml")
+    soup = BeautifulSoup(token_html, "html.parser")
     for h2 in soup.find_all("h2"):
         for a in h2.find_all_next("a", href=True):
             h = a["href"]
@@ -115,7 +115,7 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
     post_html = await _fetch(post_url, timeout=12)
     if not post_html:
         return []
-    soup = BeautifulSoup(post_html, "lxml")
+    soup = BeautifulSoup(post_html, "html.parser")
     final = []
     seen = set()
     for a in soup.find_all("a", href=True):

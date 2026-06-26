@@ -15,7 +15,7 @@ def movielinkbd(title: str, tmdb_id: str = "") -> list[dict]:
     if not html:
         return sources
 
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     posts = soup.select("article a, .post-title a, h2 a, h3 a")
     if not posts:
         return sources
@@ -28,7 +28,7 @@ def movielinkbd(title: str, tmdb_id: str = "") -> list[dict]:
     if not post_html:
         return sources
 
-    post_soup = BeautifulSoup(post_html, "lxml")
+    post_soup = BeautifulSoup(post_html, "html.parser")
 
     for a in post_soup.select("a[href]"):
         href = a.get("href", "")

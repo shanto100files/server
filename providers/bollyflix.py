@@ -16,7 +16,7 @@ async def _search(title: str) -> list[dict]:
         if not html:
             continue
 
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         results = []
 
         for a in soup.select("article a[href], .post a[href], a.post-image"):
@@ -37,7 +37,7 @@ async def _resolve_fxlinks(fx_url: str, quality: str = "HD") -> list[dict]:
     html = await async_cf_get(fx_url, headers={"Referer": fx_url, "User-Agent": UA}, timeout=10)
     if not html:
         return []
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     sources = []
     seen = set()
     loop = asyncio.get_event_loop()
@@ -61,7 +61,7 @@ async def _resolve_fxlinks(fx_url: str, quality: str = "HD") -> list[dict]:
 
 
 async def _extract_links(html: str, post_url: str = "") -> list[dict]:
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     sources = []
     seen = set()
 

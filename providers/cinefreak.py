@@ -78,7 +78,7 @@ async def _fetch_cinecloud_meta(page_url: str) -> dict:
     html = await _fetch(page_url, {"Referer": "https://new5.cinecloud.site", "Cookie": "xla=s4t"})
     if not html:
         return {}
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     meta = {}
     title_el = soup.select_one("h1.file-title, .card-header")
     if title_el:
@@ -93,7 +93,7 @@ async def _fetch_cinecloud_meta(page_url: str) -> dict:
 
 async def _extract_direct_links(html: str) -> list[str]:
     results = []
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     loop = asyncio.get_event_loop()
     for a in soup.select("a[href]"):
         href = a.get("href", "")
@@ -119,7 +119,7 @@ async def _resolve_cinecloud(page_url: str, _depth: int = 0) -> tuple[list[str],
     if not html or len(html) < 500:
         return [], {}
 
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     meta = {}
     title_el = soup.select_one("h1.file-title, .card-header")
     if title_el:
@@ -220,7 +220,7 @@ async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, 
         if not results:
             return sources
     except:
-        soup = BeautifulSoup(search_html, "lxml")
+        soup = BeautifulSoup(search_html, "html.parser")
         return sources
 
     best = results[0]
@@ -239,7 +239,7 @@ async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, 
     if not post_html:
         return sources
 
-    soup = BeautifulSoup(post_html, "lxml")
+    soup = BeautifulSoup(post_html, "html.parser")
 
     if media_type == "tv":
         dl_div = soup.select_one("div.download-links-div")
