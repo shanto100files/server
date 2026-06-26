@@ -924,7 +924,7 @@ const okr=Math.round(d.success/d.tested*100);
 div.innerHTML='<div style="background:#0a0f1e;border-radius:10px;padding:14px"><div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:.85rem"><span>Tested: <b>'+d.tested+'</b></span><span class="green">Success: <b>'+d.success+'</b></span><span class="red">Failed: <b>'+d.failed+'</b></span><span class="blue">Sources: <b>'+d.total_sources+'</b></span><span class="purple">Rate: <b>'+okr+'%</b></span></div>'+
 d.results.map(r=>'<div class="test-row"><span style="flex:1">'+r.title+'</span><span>'+(r.cached?'&#128190;cached':r.ok&&r.sources>0?'&#9989;':'&#10060;')+'</span><span class="green">'+r.sources+' src</span><span style="color:#64748b">'+r.duration+'s</span></div>').join('')+'</div>';}
 catch(e){div.innerHTML='<div style="color:#ef4444">Error: '+e.message+'</div>';}
-btn.disabled=false;btn.textContent='&#9654; Run Again';}
+btn.disabled=false;btn.innerHTML='&#9654; Run Again';}
 load();setInterval(load,5000);
 </script></body></html>"""
     return HTMLResponse(content=html)
