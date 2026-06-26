@@ -787,95 +787,147 @@ async def admin_dashboard(request: Request):
     }
 
 _startup_time = time.time()
+_request_stats = {"total": 0, "cache_hits": 0, "active": 0, "errors": 0, "total_sources": 0}
+_request_lock = threading.Lock()
+_recent_requests = []
+
+@app.get("/monitor/stats")
+async def monitor_stats():
+    uptime_sec = int(time.time() - _startup_time)
+    h, m, s2 = uptime_sec // 3600, (uptime_sec % 3600) // 60, uptime_sec % 60
+    with _request_lock:
+        stats = dict(_request_stats)
+        recent = list(_recent_requests)
+    with _provider_lock:
+        pstats = dict(_provider_stats)
+    cache_hit_rate = round(stats["cache_hits"] / max(stats["total"], 1) * 100, 1)
+    avg_sources = round(stats["total_sources"] / max(stats["total"] - stats["cache_hits"], 1), 1)
+    providers_out = []
+    for name in ["cinefreak", "hdhub4u", "mlsbd", "southfreak", "bollyflix", "vegamovies", "4khdhub"]:
+        p = pstats.get(name, {})
+        ok = p.get("ok", 0); fail = p.get("fail", 0); total_p = ok + fail
+        avg_t = round(p.get("total_time", 0) / max(p.get("count", 1), 1), 2)
+        success_rate = round(ok / max(total_p, 1) * 100)
+        providers_out.append({"name": name, "ok": ok, "fail": fail, "avg_time": avg_t, "success_rate": success_rate, "total": total_p})
+    return {"uptime": f"{h:02d}:{m:02d}:{s2:02d}", "mem_cache_items": len(_mem_cache), "active_requests": stats["active"],
+            "total_requests": stats["total"], "cache_hits": stats["cache_hits"], "cache_hit_rate": cache_hit_rate,
+            "total_sources_delivered": stats["total_sources"], "avg_sources_per_request": avg_sources,
+            "providers": providers_out, "recent_requests": recent[-10:]}
+
+@app.get("/monitor/loadtest")
+async def monitor_loadtest():
+    import random
+    movies = [
+        ("tt0468569","The Dark Knight"),("tt0111161","Shawshank Redemption"),("tt0068646","The Godfather"),
+        ("tt0110912","Pulp Fiction"),("tt0108052","Schindler List"),("tt1375666","Inception"),
+        ("tt0133093","The Matrix"),("tt0114369","Se7en"),("tt0172495","Gladiator"),("tt0816692","Interstellar"),
+    ]
+    selected = random.sample(movies, 10)
+    async def run_one(tmdb_id, title):
+        t0 = time.time()
+        try:
+            cache_key = f"{tmdb_id}:movie:{title}:s0:e0"
+            cached = mem_cache_get(f"api:{cache_key}")
+            if cached:
+                return {"title": title, "sources": cached.get("count", 0), "duration": 0.01, "cached": True, "ok": True}
+            tasks_p = [asyncio.ensure_future(asyncio.wait_for(cinefreak(tmdb_id, "movie", title, 0, 0), timeout=15)),
+                       asyncio.ensure_future(asyncio.wait_for(hdhub4u(title, tmdb_id), timeout=15))]
+            results_p = await asyncio.gather(*tasks_p, return_exceptions=True)
+            sources = [s for r in results_p if isinstance(r, list) for s in r]
+            return {"title": title, "sources": len(sources), "duration": round(time.time()-t0, 2), "cached": False, "ok": True}
+        except Exception:
+            return {"title": title, "sources": 0, "duration": round(time.time()-t0, 2), "cached": False, "ok": False}
+    results_lt = list(await asyncio.gather(*[run_one(tid, t) for tid, t in selected]))
+    return {"tested": len(selected),
+            "success": sum(1 for r in results_lt if r["ok"] and r["sources"] > 0),
+            "failed": sum(1 for r in results_lt if not (r["ok"] and r["sources"] > 0)),
+            "total_sources": sum(r["sources"] for r in results_lt), "results": results_lt}
 
 @app.get("/monitor", response_class=HTMLResponse)
 async def monitor_dashboard():
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>CinePix Server Monitor</title>
-        <style>
-            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }}
-            .container {{ max-width: 1000px; margin: 0 auto; }}
-            .header {{ text-align: center; margin-bottom: 30px; }}
-            .header h1 {{ color: #38bdf8; margin: 0; font-size: 2.5rem; }}
-            .header p {{ color: #94a3b8; font-size: 1.1rem; }}
-            .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }}
-            .card {{ background: #1e293b; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); border: 1px solid #334155; text-align: center; }}
-            .card h3 {{ color: #94a3b8; font-size: 1rem; margin-top: 0; text-transform: uppercase; letter-spacing: 1px; }}
-            .card .value {{ font-size: 2.5rem; font-weight: bold; color: #fff; margin: 10px 0; }}
-            .card .status-ok {{ color: #22c55e; }}
-            .card .status-warn {{ color: #eab308; }}
-            .providers {{ background: #1e293b; padding: 20px; border-radius: 12px; border: 1px solid #334155; }}
-            .providers h2 {{ margin-top: 0; color: #38bdf8; border-bottom: 1px solid #334155; padding-bottom: 10px; }}
-            table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
-            th, td {{ padding: 12px 15px; text-align: left; border-bottom: 1px solid #334155; }}
-            th {{ color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 0.85rem; }}
-            tr:hover {{ background-color: #0f172a; }}
-            .badge {{ padding: 5px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; }}
-            .bg-green {{ background: rgba(34, 197, 94, 0.2); color: #22c55e; }}
-            .bg-red {{ background: rgba(239, 68, 68, 0.2); color: #ef4444; }}
-        </style>
-        <script>
-            setTimeout(function(){{ window.location.reload(1); }}, 5000); // Reload every 5 seconds
-        </script>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>CinePix Server Monitor</h1>
-                <p>Live Real-Time Traffic & Health Status</p>
-            </div>
-            
-            <div class="grid">
-                <div class="card">
-                    <h3>Uptime</h3>
-                    <div class="value">{round((time.time() - _startup_time) / 60, 1)}m</div>
-                </div>
-                <div class="card">
-                    <h3>Memory Usage</h3>
-                    <div class="value status-ok">~110 MB</div>
-                </div>
-                <div class="card">
-                    <h3>Active Queue</h3>
-                    <div class="value">0</div>
-                </div>
-                <div class="card">
-                    <h3>Cache Items</h3>
-                    <div class="value status-ok">{len(_mem_cache)}</div>
-                </div>
-            </div>
-
-            <div class="providers">
-                <h2>Active Providers Status</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Provider Name</th>
-                            <th>Status</th>
-                            <th>Avg Latency</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr><td>HDHub4U</td><td><span class="badge bg-green">Online</span></td><td>~1.2s</td></tr>
-                        <tr><td>CineFreak</td><td><span class="badge bg-green">Online</span></td><td>~0.8s</td></tr>
-                        <tr><td>MLSBD</td><td><span class="badge bg-green">Online</span></td><td>~1.5s</td></tr>
-                        <tr><td>BollyFlix</td><td><span class="badge bg-green">Online</span></td><td>~2.1s</td></tr>
-                        <tr><td>SouthFreak</td><td><span class="badge bg-green">Online</span></td><td>~1.8s</td></tr>
-                        <tr><td>VegaMovies</td><td><span class="badge bg-green">Online</span></td><td>~3.5s</td></tr>
-                        <tr><td>4KHDHub</td><td><span class="badge bg-green">Online</span></td><td>~3.2s</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
-
+    html = """<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>CinePix Monitor</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;background:#0a0f1e;color:#e2e8f0;min-height:100vh;padding:24px}
+.header{text-align:center;margin-bottom:28px}
+.header h1{font-size:2rem;font-weight:700;background:linear-gradient(135deg,#38bdf8,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header p{color:#64748b;font-size:.9rem;margin-top:6px}
+.pulse{display:inline-block;width:9px;height:9px;background:#22c55e;border-radius:50%;margin-right:6px;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:14px;margin-bottom:20px}
+.card{background:#111827;border:1px solid #1e293b;border-radius:12px;padding:18px;transition:border-color .3s}
+.card:hover{border-color:#38bdf8}
+.card-label{color:#64748b;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.card-value{font-size:1.8rem;font-weight:700;color:#f8fafc}
+.green{color:#22c55e}.blue{color:#38bdf8}.purple{color:#818cf8}.red{color:#ef4444}
+.section{background:#111827;border:1px solid #1e293b;border-radius:12px;padding:18px;margin-bottom:18px}
+.section-title{font-size:.95rem;font-weight:600;color:#38bdf8;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid #1e293b}
+table{width:100%;border-collapse:collapse}
+th{color:#64748b;font-size:.7rem;text-transform:uppercase;padding:8px 10px;text-align:left;border-bottom:1px solid #1e293b}
+td{padding:9px 10px;border-bottom:1px solid #0f172a;font-size:.85rem}tr:hover td{background:#0f172a}
+.badge{padding:2px 8px;border-radius:20px;font-size:.72rem;font-weight:600}
+.bg{background:rgba(34,197,94,.15);color:#22c55e}.by{background:rgba(234,179,8,.15);color:#eab308}
+.br{background:rgba(239,68,68,.15);color:#ef4444}.bb{background:rgba(56,189,248,.15);color:#38bdf8}
+.bar{background:#1e293b;border-radius:99px;height:5px;overflow:hidden}
+.bar-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#22c55e,#38bdf8);transition:width .5s}
+.btn{padding:9px 18px;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:.85rem;background:linear-gradient(135deg,#38bdf8,#818cf8);color:#fff;transition:all .2s}
+.btn:hover{opacity:.85}.btn:disabled{opacity:.4;cursor:not-allowed}
+.log-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #0f172a;font-size:.82rem}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.test-row{display:flex;gap:12px;justify-content:space-between;padding:5px 0;border-bottom:1px solid #1e293b;font-size:.83rem;flex-wrap:wrap}
+#rbar{height:3px;background:linear-gradient(90deg,#38bdf8,#818cf8);position:fixed;top:0;left:0;animation:shrink 5s linear infinite}
+@keyframes shrink{from{width:100%}to{width:0}}</style></head>
+<body><div id="rbar"></div>
+<div style="max-width:1080px;margin:0 auto">
+<div class="header"><h1>&#127916; CinePix Server Monitor</h1><p><span class="pulse"></span>Live Dashboard &mdash; Auto-refreshes every 5s</p></div>
+<div class="grid">
+  <div class="card"><div class="card-label">Uptime</div><div class="card-value blue" id="uptime">--</div></div>
+  <div class="card"><div class="card-label">Total Requests</div><div class="card-value" id="treq">--</div></div>
+  <div class="card"><div class="card-label">Active Now</div><div class="card-value green" id="areq">--</div></div>
+  <div class="card"><div class="card-label">Cache Hit Rate</div><div class="card-value purple" id="crate">--%</div></div>
+  <div class="card"><div class="card-label">Cache Items</div><div class="card-value" id="citems">--</div></div>
+  <div class="card"><div class="card-label">Sources Sent</div><div class="card-value green" id="tsrc">--</div></div>
+</div>
+<div class="section"><div class="section-title">&#128268; Provider Health (Live)</div>
+<table><thead><tr><th>Provider</th><th>Success</th><th>Fail</th><th>Avg Time</th><th>Status</th><th>Health</th></tr></thead>
+<tbody id="ptable"><tr><td colspan="6" style="text-align:center;color:#64748b;padding:20px">Loading...</td></tr></tbody></table></div>
+<div class="section"><div class="section-title">&#128203; Recent Request Log</div>
+<div id="rlog"><div style="color:#64748b;text-align:center;padding:20px">No requests yet...</div></div></div>
+<div class="section"><div class="section-title">&#9889; Built-in Load Test (10 Movies)</div>
+<p style="color:#64748b;font-size:.82rem;margin-bottom:14px">10ti random movie-r source ek sathe fetch kore server performance check kore.</p>
+<button class="btn" id="tbtn" onclick="runTest()">&#9654; Run Load Test</button>
+<div id="tres" style="margin-top:14px"></div></div>
+</div>
+<script>
+async function load(){try{const d=await(await fetch('/monitor/stats')).json();
+document.getElementById('uptime').textContent=d.uptime;
+document.getElementById('treq').textContent=d.total_requests;
+document.getElementById('areq').textContent=d.active_requests;
+document.getElementById('crate').textContent=d.cache_hit_rate+'%';
+document.getElementById('citems').textContent=d.mem_cache_items;
+document.getElementById('tsrc').textContent=d.total_sources_delivered;
+if(d.providers&&d.providers.length){document.getElementById('ptable').innerHTML=d.providers.map(p=>{
+const sr=p.total===0?null:p.success_rate;
+const bc=sr===null?'bb':sr>=70?'bg':sr>=40?'by':'br';
+const st=sr===null?'No Data':sr>=70?'Good':sr>=40?'Slow':'Poor';
+return'<tr><td><b>'+p.name+'</b></td><td class="green">'+p.ok+'</td><td class="red">'+p.fail+'</td><td>'+p.avg_time+'s</td><td><span class="badge '+bc+'">'+st+'</span></td><td><div class="bar"><div class="bar-fill" style="width:'+(sr===null?50:sr)+'%"></div></div></td></tr>';}).join('');}
+if(d.recent_requests&&d.recent_requests.length){document.getElementById('rlog').innerHTML=[...d.recent_requests].reverse().map(r=>{
+const dc=r.cached?'#818cf8':r.sources>0?'#22c55e':'#ef4444';
+const tag=r.cached?'<span class="badge bb">CACHE</span>':r.sources>0?'<span class="badge bg">OK</span>':'<span class="badge br">FAIL</span>';
+return'<div class="log-row"><div class="dot" style="background:'+dc+'"></div><span style="color:#94a3b8;flex-shrink:0">'+r.ts+'</span><span style="flex:1">'+r.title+'</span>'+tag+'<span class="green">'+r.sources+' src</span><span style="color:#64748b">'+r.duration+'s</span></div>';}).join('');}
+}catch(e){}}
+async function runTest(){const btn=document.getElementById('tbtn'),div=document.getElementById('tres');
+btn.disabled=true;btn.textContent='Running...';
+div.innerHTML='<div style="color:#64748b;padding:12px;text-align:center">&#9203; Testing 10 movies concurrently...</div>';
+try{const d=await(await fetch('/monitor/loadtest')).json();
+const okr=Math.round(d.success/d.tested*100);
+div.innerHTML='<div style="background:#0a0f1e;border-radius:10px;padding:14px"><div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:.85rem"><span>Tested: <b>'+d.tested+'</b></span><span class="green">Success: <b>'+d.success+'</b></span><span class="red">Failed: <b>'+d.failed+'</b></span><span class="blue">Sources: <b>'+d.total_sources+'</b></span><span class="purple">Rate: <b>'+okr+'%</b></span></div>'+
+d.results.map(r=>'<div class="test-row"><span style="flex:1">'+r.title+'</span><span>'+(r.cached?'&#128190;cached':r.ok&&r.sources>0?'&#9989;':'&#10060;')+'</span><span class="green">'+r.sources+' src</span><span style="color:#64748b">'+r.duration+'s</span></div>').join('')+'</div>';}
+catch(e){div.innerHTML='<div style="color:#ef4444">Error: '+e.message+'</div>';}
+btn.disabled=false;btn.textContent='&#9654; Run Again';}
+load();setInterval(load,5000);
+</script></body></html>"""
+    return HTMLResponse(content=html)
 
 @app.get("/api/admin/providers")
 async def admin_providers(request: Request):
