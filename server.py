@@ -41,15 +41,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=30)
-_provider_semaphore = asyncio.Semaphore(15)
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=40)
+_provider_semaphore = asyncio.Semaphore(25)
 _active_streams = 0
 _streams_lock = threading.Lock()
 
 _mem_cache = OrderedDict()
-_mem_cache_ttl = 600
+_mem_cache_ttl = 900
 _mem_lock = threading.Lock()
-_mem_max = 1000
+_mem_max = 1500
 
 _inflight = {}
 _inflight_lock = threading.Lock()
@@ -116,7 +116,7 @@ def get_provider_health():
         return result
 
 _rate_limit = {}
-RATE_LIMIT = 60
+RATE_LIMIT = 120
 RATE_WINDOW = 60
 
 def check_rate_limit(ip):
@@ -139,6 +139,7 @@ async def startup():
     await init_link_table()
     threading.Thread(target=_run_domain_discovery, daemon=True).start()
     threading.Thread(target=_cleanup_link_cache, daemon=True).start()
+    threading.Thread(target=_preload_sitemaps, daemon=True).start()
 
 def _cleanup_link_cache():
     try:
@@ -150,6 +151,17 @@ def _cleanup_link_cache():
         loop.close()
     except Exception as e:
         print(f"[LinkIndex] Cleanup error: {e}")
+
+def _preload_sitemaps():
+    try:
+        import asyncio as _aio
+        from providers.hdhub4u import _load_sitemap as _hd_sitemap
+        loop = _aio.new_event_loop()
+        urls = loop.run_until_complete(_hd_sitemap())
+        print(f"[HDHub4U] Sitemap preloaded: {len(urls)} URLs")
+        loop.close()
+    except Exception as e:
+        print(f"[HDHub4U] Sitemap preload error: {e}")
 
 def _run_domain_discovery():
     try:
@@ -1105,6 +1117,64 @@ async def status():
         "provider_health": get_provider_health(),
         "providers": ["CineFreak", "HDHub4U", "MLSBD", "MovieLinkBD", "VegaMovies", "CastleTV", "CineStream", "4KHD"],
     }
+
+# ===== Batch Fetcher: TMDB 2025 Content =====
+import aiosqlite as _aiosqlite_batch
+
+@app.get("/admin/batch/stats")
+async def batch_stats():
+    from batch_fetcher import DB_PATH as _BATCH_DB, init_db as _init_batch_db
+    await _init_batch_db()
+    async with _aiosqlite_batch.connect(_BATCH_DB) as db:
+        async with db.execute("SELECT COUNT(*) FROM content_cache") as cursor:
+            total = (await cursor.fetchone())[0]
+        async with db.execute("SELECT media_type, COUNT(*) FROM content_cache GROUP BY media_type") as cursor:
+            by_type = dict(await cursor.fetchall())
+        try:
+            async with db.execute("SELECT COUNT(*) FROM scraped_content") as cursor:
+                scraped = (await cursor.fetchone())[0]
+        except:
+            scraped = 0
+    return {
+        "total_content": total,
+        "movies": by_type.get("movie", 0),
+        "tv_shows": by_type.get("tv", 0),
+        "scraped": scraped,
+    }
+
+@app.post("/admin/batch/fetch")
+async def batch_fetch(request: Request):
+    body = await request.json().catch(lambda: ({}))
+    media_type = body.get("type")  # "movie", "tv", or None for both
+    pages = min(body.get("pages", 3), 10)
+    genre = body.get("genre")
+
+    from batch_fetcher import fetch_all_2025, save_content, init_db as _init_batch_db
+    await _init_batch_db()
+
+    content = await fetch_all_2025(media_type, genre, pages)
+    saved = await save_content(content)
+    return {"fetched": len(content), "saved": saved}
+
+@app.post("/admin/batch/scrape")
+async def batch_scrape_endpoint(request: Request):
+    body = await request.json().catch(lambda: ({}))
+    limit = min(body.get("limit", 20), 100)
+
+    from batch_fetcher import get_unscraped_content, scrape_content_links, mark_scraped, init_db as _init_batch_db
+    await _init_batch_db()
+
+    items = await get_unscraped_content(limit)
+    results = []
+    for item in items:
+        try:
+            sources = await scrape_content_links(item["tmdb_id"], item["title"], item["media_type"])
+            await mark_scraped(item["tmdb_id"], item["title"], item["media_type"])
+            results.append({"title": item["title"], "links": len(sources)})
+        except Exception as e:
+            results.append({"title": item["title"], "error": str(e)})
+        await asyncio.sleep(0.5)
+    return {"scraped": len(results), "results": results}
 
 @app.get("/clear")
 async def clear():

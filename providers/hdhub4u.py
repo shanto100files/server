@@ -23,19 +23,22 @@ async def _load_sitemap() -> list[str]:
             return _sitemap_cache["urls"]
 
     urls = []
-    try:
-        index_r = await async_cf_get(f"{_PRIMARY}/sitemap.xml", timeout=12)
-        if not index_r:
-            return []
-        soup = BeautifulSoup(index_r, "xml.etree.ElementTree")
-        post_sitemaps = [loc.text for loc in soup.select("loc") if "post-sitemap" in loc.text]
-        for sm_url in post_sitemaps:
-            sm_html = await async_cf_get(sm_url, timeout=12)
-            if sm_html:
-                sm_soup = BeautifulSoup(sm_html, "xml.etree.ElementTree")
-                urls.extend(loc.text for loc in sm_soup.select("loc"))
-    except Exception:
-        pass
+    for domain in HDHUB4U_DOMAINS:
+        try:
+            index_r = await async_cf_get(f"{domain}/sitemap.xml", timeout=12)
+            if not index_r:
+                continue
+            soup = BeautifulSoup(index_r, "xml.etree.ElementTree")
+            post_sitemaps = [loc.text for loc in soup.select("loc") if "post-sitemap" in loc.text]
+            for sm_url in post_sitemaps:
+                sm_html = await async_cf_get(sm_url, timeout=12)
+                if sm_html:
+                    sm_soup = BeautifulSoup(sm_html, "xml.etree.ElementTree")
+                    urls.extend(loc.text for loc in sm_soup.select("loc"))
+            if urls:
+                break
+        except Exception:
+            continue
 
     if urls:
         with _sitemap_lock:
@@ -47,13 +50,14 @@ async def _load_sitemap() -> list[str]:
 
 def _slug_match(query: str, url: str) -> float:
     slug = url.rstrip("/").split("/")[-1]
-    slug = re.sub(
-        r"-(1080p|720p|480p|4k|2160p|bluray|web-dl|webrip|dvdrip|hdtv|hdcam|cam|pdvdrip|hdrip|hevc|x264|x265|10bit|full|movie|hindi|english|dual.?audio).*",
+    slug_clean = re.sub(
+        r"-(1080p|720p|480p|4k|2160p|bluray|web-dl|webrip|dvdrip|hdtv|hdcam|cam|pdvdrip|hdrip|hevc|x264|x265|10bit|full|movie|hindi|english|dual.?audio|south|hollywood|bollywood|uncut|extended|proper|amzn|nf|hotstar|jio|zee5|sony.?liv|mx.?player|telegram|hdrip|pre.?dvd|hdcam|camrip|ts|dvdscr|scr).*",
         "",
         slug,
         flags=re.I,
     )
-    slug_title = re.sub(r"-\d{4}(-|$)", "", slug).replace("-", " ").strip().lower()
+    year_match = re.search(r"(\d{4})", slug_clean)
+    slug_title = re.sub(r"-\d{4}(-|$)", "", slug_clean).replace("-", " ").strip().lower()
     q = query.lower().strip()
 
     if q == slug_title:
@@ -61,25 +65,28 @@ def _slug_match(query: str, url: str) -> float:
 
     qw = set(q.split())
     sw = set(slug_title.split())
+    qw.discard("")
+    sw.discard("")
     if not qw or not sw:
         return 0.0
 
     overlap = qw & sw
-    precision = len(overlap) / len(qw) if qw else 0
-    recall = len(overlap) / len(sw) if sw else 0
-
     if not overlap:
         return 0.0
 
-    score = (precision * 60 + recall * 40)
+    precision = len(overlap) / len(qw)
+    recall = len(overlap) / len(sw)
+    score = precision * 60 + recall * 40
+
     if len(overlap) == len(qw) and len(overlap) == len(sw):
         score = 99.0
+    elif len(overlap) == len(qw):
+        score = max(score, 85.0)
 
-    year_match = re.search(r"(\d{4})", slug)
     if year_match:
         score += 5
 
-    return score
+    return min(score, 99.5)
 
 
 async def _search_sitemap(title: str) -> str | None:
@@ -90,7 +97,7 @@ async def _search_sitemap(title: str) -> str | None:
     scored = []
     for url in urls:
         score = _slug_match(title, url)
-        if score >= 40:
+        if score >= 30:
             scored.append((score, url))
     scored.sort(reverse=True)
 
@@ -100,50 +107,7 @@ async def _search_sitemap(title: str) -> str | None:
 
 
 async def _search_direct(title: str) -> str | None:
-    """Fallback: scrape search page when sitemap doesn't have the movie."""
-    for domain in HDHUB4U_DOMAINS:
-        try:
-            from urllib.parse import quote
-            html = await async_cf_get(f"{domain}/?s={quote(title)}", timeout=10)
-            if not html or len(html) < 500:
-                continue
-            soup = BeautifulSoup(html, "html.parser")
-            qw = set(title.lower().split())
-            for a in soup.select("a[href]"):
-                href = a.get("href", "")
-                text = a.get_text(strip=True).lower()
-                if not href or "/?s=" in href or href.rstrip("/") == domain:
-                    continue
-                if any(x in href for x in ["/page/", "/tag/", "/category/", "search.html"]):
-                    continue
-                if not href.startswith("http") and not href.startswith("/"):
-                    continue
-                tw = set(text.split())
-                overlap = qw & tw
-                if len(overlap) >= max(1, len(qw) - 1):
-                    if href.startswith("http"):
-                        from urllib.parse import urlparse
-                        parsed = urlparse(href)
-                        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-                    return href
-        except Exception:
-            continue
-
-        # Fallback: try searching via google dork
-        try:
-            from urllib.parse import quote
-            g_url = f"https://www.google.com/search?q=site:{domain.split('//')[1]}+{quote(title)}"
-            g_html = await async_cf_get(g_url, timeout=8)
-            if g_html:
-                import re
-                found = re.search(rf'href="(https?://{re.escape(domain.split("//")[1])}/[^"]+)"', g_html)
-                if found:
-                    from urllib.parse import urlparse
-                    parsed = urlparse(found.group(1))
-                    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        except Exception:
-            pass
-    return None
+    return await _search_sitemap(title)
 
 
 async def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
