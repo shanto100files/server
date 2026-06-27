@@ -744,10 +744,20 @@ async def debug_vegamovies(q: str = "RRR"):
     h3_entry = soup.find_all("h3", class_=re.compile(r"entry-title|post-title", re.I))
     result["h3_entry_title"] = len(h3_entry)
     if articles_post_item:
-        first_a = articles_post_item[0].find("a", href=True)
+        first = articles_post_item[0]
+        first_a = first.find("a", href=True)
         if first_a:
             result["first_article_href"] = first_a["href"][:100]
             result["first_article_text"] = first_a.get_text(strip=True)[:80]
+            result["first_a_title"] = first_a.get("title", "")
+            img = first_a.find("img")
+            if img:
+                result["first_a_img_alt"] = img.get("alt", "")[:80]
+                result["first_a_img_src"] = img.get("src", "")[:80]
+            h3 = first.find("h3")
+            if h3:
+                result["first_article_h3"] = h3.get_text(strip=True)[:80]
+        result["first_article_html"] = str(first)[:500]
     elif h3_entry:
         first_a = h3_entry[0].find("a", href=True)
         if first_a:
