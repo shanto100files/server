@@ -1,10 +1,30 @@
 import re
+import asyncio
 from bs4 import BeautifulSoup
 from client import async_cf_get
 from providers.auto_resolver import title_matches_search
 
 SOUTHFREAK_DOMAINS = ["https://southfreak.fyi", "https://southfreak.me"]
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
+
+
+async def _resolve_protector(url: str) -> str:
+    """Resolve direct-dl.lol and similar protector pages to get actual download URL."""
+    if "direct-dl.lol" not in url:
+        return url
+    try:
+        html = await async_cf_get(url, timeout=12)
+        if not html:
+            return url
+        m = re.search(r'id=["\']vd["\'][^>]*href=["\']([^"\']+)', html)
+        if m and "googleusercontent" in m.group(1):
+            return m.group(1)
+        m2 = re.search(r'href=["\']([^"\']*googleusercontent[^"\']*)', html)
+        if m2:
+            return m2.group(1)
+        return url
+    except Exception:
+        return url
 
 
 async def _search(title: str) -> list[dict]:
@@ -37,7 +57,7 @@ async def _search(title: str) -> list[dict]:
     return []
 
 
-def _extract_links(html: str, post_url: str = "") -> list[dict]:
+async def _extract_links(html: str, post_url: str = "") -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     sources = []
     seen = set()
@@ -69,11 +89,13 @@ def _extract_links(html: str, post_url: str = "") -> list[dict]:
             continue
         seen.add(href)
 
+        resolved = await _resolve_protector(href)
+        fmt = "mkv" if ".mkv" in resolved else "mp4"
         sources.append({
-            "url": href,
+            "url": resolved,
             "quality": current_quality,
             "provider": "SouthFreak",
-            "format": "mp4",
+            "format": fmt,
         })
 
     return sources
@@ -104,5 +126,5 @@ async def southfreak(title: str, tmdb_id: str = "", year: str = "", media_type: 
     if not html:
         return []
 
-    sources = _extract_links(html, post_url=best["url"])
+    sources = await _extract_links(html, post_url=best["url"])
     return sources[:8]

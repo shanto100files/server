@@ -41,6 +41,24 @@ async def _resolve_hubcloud(hub_url):
     html = await _fetch(hub_url, timeout=10)
     if not html:
         return []
+    
+    # Extract metadata from hubcloud page
+    meta = {}
+    soup = BeautifulSoup(html, "html.parser")
+    title_tag = soup.find("title")
+    if title_tag:
+        meta["filename"] = title_tag.get_text(strip=True)
+    for li in soup.find_all("li"):
+        text = li.get_text(strip=True)
+        if "File Size" in text:
+            sz = li.find("i")
+            if sz:
+                meta["fileSize"] = sz.get_text(strip=True)
+        elif "File Type" in text:
+            ft = li.find("i")
+            if ft:
+                meta["fileType"] = ft.get_text(strip=True)
+    
     m = re.search(r"var url = '([^']+)'", html)
     if not m:
         return []
@@ -49,8 +67,8 @@ async def _resolve_hubcloud(hub_url):
     if not r:
         return []
     results = []
-    soup = BeautifulSoup(r, "html.parser")
-    for a in soup.find_all("a", href=True):
+    soup2 = BeautifulSoup(r, "html.parser")
+    for a in soup2.find_all("a", href=True):
         h = a["href"]
         t = a.get_text(strip=True)
         if not h.startswith("http"):
@@ -65,7 +83,10 @@ async def _resolve_hubcloud(hub_url):
             if q.lower() in combined:
                 quality = q
                 break
-        results.append({"url": h, "quality": quality})
+        entry = {"url": h, "quality": quality}
+        if meta:
+            entry["metadata"] = meta
+        results.append(entry)
     return results
 
 async def fourkhd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
@@ -117,6 +138,15 @@ async def fourkhd(title, tmdb_id="", season=0, episode=0, year="", media_type=""
                 if q.lower() in url.lower():
                     quality = q
                     break
-            fmt = "mkv" if ".mkv" in url else "mp4"
-            final.append({"url": url, "quality": quality, "provider": "4KHD", "format": fmt})
+            fmt = "zip" if ".zip" in url else ("mkv" if ".mkv" in url else "mp4")
+            entry = {"url": url, "quality": quality, "provider": "4KHD", "format": fmt}
+            meta = r.get("metadata")
+            if meta:
+                if meta.get("fileSize"):
+                    entry["fileSize"] = meta["fileSize"]
+                if meta.get("filename"):
+                    entry["filename"] = meta["filename"]
+                if meta.get("fileType"):
+                    entry["fileType"] = meta["fileType"]
+            final.append(entry)
     return final[:10]
