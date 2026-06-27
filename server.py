@@ -719,7 +719,7 @@ async def health():
 async def debug_vegamovies(q: str = "RRR"):
     import re, time as _time
     from bs4 import BeautifulSoup
-    from providers.vegamovies import _search_typesense, _search_dle, _find_post_in_html, _fetch, _match_title
+    from providers.vegamovies import _search_typesense, _search_dle, _find_post_in_html, _fetch, _match_title, _resolve_vcloud
     qw = set(q.lower().split())
     result = {}
     
@@ -750,6 +750,14 @@ async def debug_vegamovies(q: str = "RRR"):
                         result["protector_vcloud_links"] = [u[:100] for u in vcloud2[:3]]
                     else:
                         result["protector_page"] = "EMPTY"
+                # Test vcloud resolution
+                vcloud_links = re.findall(r'href="(https?://vcloud\.zip/[^"]*)"', ph2)
+                if vcloud_links:
+                    vcloud_url = vcloud_links[0]
+                    result["vcloud_url"] = vcloud_url[:100]
+                    resolved = await _resolve_vcloud(vcloud_url)
+                    result["vcloud_resolved"] = len(resolved)
+                    result["vcloud_resolved_urls"] = [{"url": r["url"][:80], "quality": r.get("quality", "?")} for r in resolved[:3]]
             else:
                 result["post_fetch"] = "EMPTY"
             break
