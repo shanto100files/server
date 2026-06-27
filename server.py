@@ -853,7 +853,8 @@ async def list_cinefreak_posts():
                     "year": row[2],
                     "language": row[3],
                     "quality": row[4],
-                    "links_count": len(links)
+                    "links_count": len(links),
+                    "links": links  # ← Actual links add korechi
                 })
     return {"total": len(posts), "posts": posts}
 
