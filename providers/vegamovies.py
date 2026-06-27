@@ -15,33 +15,12 @@ async def _fetch(url, timeout=12):
     return await async_cf_get(url, headers={"Referer": "https://vegamovies4u.co.in"}, timeout=timeout)
 
 async def _dle_search(domain, query, timeout=12):
-    """VegaMovies search — handle both Typesense (WordPress) and DLE CMS sites"""
+    """VegaMovies search — try Typesense (WordPress) first, then DLE CMS fallback"""
     from urllib.parse import quote_plus
-    qw = set(query.lower().split())
     
-    def _has_query_in_html(html, qw):
-        soup = BeautifulSoup(html, "html.parser")
-        for article in soup.find_all("article", class_=re.compile(r"post-item", re.I)):
-            a_tag = article.find("a", href=True)
-            if not a_tag:
-                continue
-            title = a_tag.get("title", "") or a_tag.get_text(strip=True)
-            if not title:
-                h3 = article.find("h3")
-                if h3:
-                    title = h3.get_text(strip=True)
-            if not title:
-                img = a_tag.find("img")
-                if img:
-                    title = img.get("alt", "")
-            if title:
-                tw = set(title.lower().split())
-                if qw & tw:
-                    return True
-        return False
-
-    # Try Typesense JSON API first (vegamovies.navy / WordPress sites)
-    html = await async_cf_get(f"{domain}/search.php?q={quote_plus(query)}&page=1", timeout=timeout)
+    # 1. Try Typesense JSON API on the primary domain (vegamovies.navy)
+    typesense_url = f"{domain}/search.php?q={quote_plus(query)}&page=1"
+    html = await async_cf_get(typesense_url, timeout=timeout)
     if html:
         try:
             data = json.loads(html)
@@ -51,30 +30,36 @@ async def _dle_search(domain, query, timeout=12):
         except (json.JSONDecodeError, KeyError):
             pass
     
-    # Try DLE CMS POST search first (most DLE sites require POST for search)
+    # 2. DLE fallback: try vegamovies4u.co.in (known DLE site)
+    dle_domain = "https://vegamovies4u.co.in"
+    if domain != dle_domain:
+        # Try Typesense on DLE domain too (some DLE sites have search.php)
+        ts2 = await async_cf_get(f"{dle_domain}/search.php?q={quote_plus(query)}&page=1", timeout=timeout)
+        if ts2:
+            try:
+                data = json.loads(ts2)
+                hits = data.get("hits", [])
+                if hits:
+                    return {"type": "typesense", "data": data, "domain": dle_domain}
+            except:
+                pass
+    
+    # Try DLE CMS POST search
     body = f"do=search&subaction=search&story={quote_plus(query)}"
-    resp = await async_cf_post(domain + "/", data=body, headers={
-        "Referer": domain + "/",
+    resp = await async_cf_post(dle_domain + "/", data=body, headers={
+        "Referer": dle_domain + "/",
         "Content-Type": "application/x-www-form-urlencoded",
     }, timeout=timeout)
     if resp:
         text = resp.text if hasattr(resp, 'text') else resp
         if text and len(text) > 2000 and ("post-item" in text or "entry-title" in text):
-            if _has_query_in_html(text, qw):
-                return {"type": "dle", "data": text, "domain": domain}
+            return {"type": "dle", "data": text, "domain": dle_domain}
 
     # Try DLE CMS GET search
-    html2 = await async_cf_get(f"{domain}/?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
-    if html2 and ("post-item" in html2 or "entry-title" in html2):
-        if _has_query_in_html(html2, qw):
-            return {"type": "dle", "data": html2, "domain": domain}
+    html2 = await async_cf_get(f"{dle_domain}/?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
+    if html2 and len(html2) > 2000 and ("post-item" in html2 or "entry-title" in html2):
+        return {"type": "dle", "data": html2, "domain": dle_domain}
 
-    # Try index.php GET
-    html3 = await async_cf_get(f"{domain}/index.php?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
-    if html3 and ("post-item" in html3 or "entry-title" in html3):
-        if _has_query_in_html(html3, qw):
-            return {"type": "dle", "data": html3, "domain": domain}
-    
     return None
 
 async def _get_domain():
@@ -82,20 +67,16 @@ async def _get_domain():
     if _DOMAIN_CACHE["url"] and (time.time() - _DOMAIN_CACHE["time"] < _DOMAIN_CACHE_TTL):
         return _DOMAIN_CACHE["url"]
     
-    # Dynamic URL may return vegamovies.navy (WordPress/Typesense, limited content)
-    # or vegamovies4u.co.in (DLE CMS, more content). Prefer DLE site.
+    # Dynamic URL returns the primary domain (usually vegamovies.navy - WordPress/Typesense)
     try:
         r = await async_cf_get(DYNAMIC_URLS, timeout=8)
         if r:
             data = json.loads(r)
             dynamic_domain = data.get("vegamovies", "")
-            # If dynamic gives us a DLE site, use it; otherwise use the DLE domain
-            if "4u" in dynamic_domain or "co.in" in dynamic_domain:
+            if dynamic_domain:
                 _DOMAIN_CACHE["url"] = dynamic_domain
-            else:
-                _DOMAIN_CACHE["url"] = VEGAMOVIES_DOMAINS[0]
-            _DOMAIN_CACHE["time"] = time.time()
-            return _DOMAIN_CACHE["url"]
+                _DOMAIN_CACHE["time"] = time.time()
+                return _DOMAIN_CACHE["url"]
     except:
         pass
         
@@ -148,19 +129,10 @@ async def _resolve_vcloud(url):
     return results
 
 async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
-    import traceback
-    try:
-        return await _vegamovies_inner(title, tmdb_id, season, episode, year, media_type)
-    except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[VegaMovies] ERROR: {e}\n{tb}", flush=True)
-        return [{"url": "", "quality": "error", "provider": f"VegaMovies-err:{str(e)[:80]}", "format": "mp4"}]
-
-async def _vegamovies_inner(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
     domain = await _get_domain()
     search_result = await _dle_search(domain, title, timeout=12)
     if not search_result:
-        return [{"url": "", "quality": "debug", "provider": f"VM-no-search:{domain}", "format": "mp4"}]
+        return []
     search_result = await _dle_search(domain, title, timeout=12)
     if not search_result:
         return []
