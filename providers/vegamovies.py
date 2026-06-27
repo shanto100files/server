@@ -37,12 +37,15 @@ async def _get_domain():
 
 
 async def _resolve_vcloud(url, retries=3):
-    """Resolve vcloud/hubcloud protector pages to get actual download links."""
+    """Resolve vcloud/hubcloud protector pages to get actual download links.
+    
+    If direct fetch fails (CF blocked on HF), return the vcloud URL itself 
+    so the player can open it in the user's browser.
+    """
     import asyncio
     from client import _get_sync_session, _cloudscraper_get
     
     def _sync_fetch(sync_url):
-        """Fetch using sync curl_cffi session (fresh per attempt) or cloudscraper."""
         try:
             s = _get_sync_session(sync_url)
             r = s.get(sync_url, timeout=12, impersonate="chrome110")
@@ -50,7 +53,6 @@ async def _resolve_vcloud(url, retries=3):
                 return r.text
         except:
             pass
-        # Fallback: cloudscraper
         cs = _cloudscraper_get(sync_url, timeout=15)
         if cs:
             return cs
@@ -72,7 +74,8 @@ async def _resolve_vcloud(url, retries=3):
                 pass
     
     if not html:
-        return []
+        # CF blocked — return the protector URL itself for browser resolution
+        return [{"url": url, "quality": "HD"}]
     
     results = []
     
@@ -102,6 +105,9 @@ async def _resolve_vcloud(url, retries=3):
                             pass
                 if token_html:
                     results = _parse_download_links(token_html)
+                if not results:
+                    # Token page also CF blocked — return token URL for browser
+                    results = [{"url": token_url, "quality": "HD"}]
         except:
             pass
     
@@ -404,9 +410,17 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
             continue
         if not any(x in h for x in ["nexdrive", "vgmlinks", "hubcloud", "vcloud", "gdflix", "drivebot"]):
             continue
+        quality = "HD"
+        combined = t + " " + unquote(h)
+        for q in ["2160p", "4K", "1080p", "720p", "480p"]:
+            if q.lower() in combined.lower():
+                quality = q
+                break
         # Try to resolve the protector link directly
         nex_html = await _fetch(h, timeout=10)
         if not nex_html:
+            # Protector page CF blocked — return protector URL for browser resolution
+            final.append({"url": h, "quality": quality, "provider": "VegaMovies", "format": "mp4"})
             continue
         fast_match = re.search(r'href="(https?://fast-dl\.one/dl/[^"]+)"', nex_html)
         if fast_match:
