@@ -717,22 +717,46 @@ async def health():
 
 @app.get("/admin/debug/vegamovies")
 async def debug_vegamovies(q: str = "RRR"):
+    import re
+    from bs4 import BeautifulSoup
     from providers.vegamovies import _dle_search, _get_domain
     domain = await _get_domain()
     result = {"domain": domain}
     search_result = await _dle_search(domain, q, timeout=15)
     if not search_result:
         result["search"] = "EMPTY"
-    else:
-        result["search_type"] = search_result.get("type", "unknown")
-        data = search_result.get("data", "")
+        return result
+    result["search_type"] = search_result.get("type", "unknown")
+    data = search_result.get("data", "")
+    if search_result["type"] == "typesense":
         if isinstance(data, dict):
             result["hits_count"] = len(data.get("hits", []))
-        else:
-            result["search_length"] = len(data)
-            result["has_post_item"] = "post-item" in data
-            result["has_entry_title"] = "entry-title" in data
-            result["has_cf_challenge"] = "Just a moment" in data
+            result["hits_titles"] = [hit.get("document", {}).get("post_title", "") for hit in data.get("hits", [])[:5]]
+        return result
+    if isinstance(data, dict):
+        result["search"] = "dict unexpected"
+        return result
+    soup = BeautifulSoup(data, "html.parser")
+    result["total_a_tags"] = len(soup.find_all("a", href=True))
+    result["articles"] = len(soup.find_all("article"))
+    articles_post_item = soup.find_all("article", class_=re.compile(r"post-item", re.I))
+    result["articles_post_item"] = len(articles_post_item)
+    h3_entry = soup.find_all("h3", class_=re.compile(r"entry-title|post-title", re.I))
+    result["h3_entry_title"] = len(h3_entry)
+    if articles_post_item:
+        first_a = articles_post_item[0].find("a", href=True)
+        if first_a:
+            result["first_article_href"] = first_a["href"][:100]
+            result["first_article_text"] = first_a.get_text(strip=True)[:80]
+    elif h3_entry:
+        first_a = h3_entry[0].find("a", href=True)
+        if first_a:
+            result["first_h3_href"] = first_a["href"][:100]
+            result["first_h3_text"] = first_a.get_text(strip=True)[:80]
+    else:
+        a_tags = soup.find_all("a", href=True)[:10]
+        result["sample_a_texts"] = [a.get_text(strip=True)[:50] for a in a_tags if a.get_text(strip=True)]
+        result["sample_a_hrefs"] = [a["href"][:80] for a in a_tags if a.get_text(strip=True)]
     return result
 
 @app.get("/admin/link-cache")
