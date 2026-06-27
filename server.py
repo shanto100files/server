@@ -717,85 +717,28 @@ async def health():
 
 @app.get("/admin/debug/vegamovies")
 async def debug_vegamovies(q: str = "RRR"):
-    import re
-    from bs4 import BeautifulSoup
-    from providers.vegamovies import _get_domain, _dle_search, _fetch, _resolve_vcloud
-    from client import async_cf_get
-    from urllib.parse import unquote
-    domain = await _get_domain()
-    result = {"domain": domain}
-    
-    search_result = await _dle_search(domain, q, timeout=12)
-    if not search_result:
-        result["search"] = "NO_RESULTS"
-        return result
-    
-    st = search_result["type"]
-    sd = search_result["data"]
-    bd = search_result["domain"]
-    result["search_type"] = st
-    
-    if st == "typesense":
-        hits = sd.get("hits", [])
-        result["hits"] = len(hits)
-        if hits:
-            doc = hits[0].get("document", {})
-            result["first_title"] = doc.get("post_title", "")
-            result["first_url"] = doc.get("permalink", "")
-        return result
-    
-    soup = BeautifulSoup(sd, "html.parser")
+    import asyncio
+    from providers.vegamovies import _search_typesense, _search_dle, _find_post_in_html
+    from urllib.parse import quote_plus
+    result = {}
     qw = set(q.lower().split())
-    post_url = None
-    post_title_found = None
     
-    for article in soup.find_all("article", class_=re.compile(r"post-item", re.I)):
-        a_tag = article.find("a", href=True)
-        if not a_tag:
-            continue
-        href = a_tag["href"]
-        pt = a_tag.get("title", "") or a_tag.get_text(strip=True)
-        if not pt:
-            h3 = article.find("h3")
-            if h3:
-                pt = h3.get_text(strip=True)
-        if not pt:
-            img = a_tag.find("img")
-            if img:
-                pt = img.get("alt", "")
-        tw = set(pt.lower().split())
-        overlap = qw & tw
-        if overlap:
-            post_url = href
-            post_title_found = pt
-            break
+    # Test Typesense on vegamovies.navy
+    ts1 = await _search_typesense("https://vegamovies.navy", q)
+    result["typesense_navy"] = {"hits": len(ts1), "titles": [t for _, t in ts1[:5]]}
     
-    result["post_url"] = post_url[:100] if post_url else None
-    result["post_title"] = post_title_found[:100] if post_title_found else None
+    # Test Typesense on vegamovies4u.co.in
+    ts2 = await _search_typesense("https://vegamovies4u.co.in", q)
+    result["typesense_4u"] = {"hits": len(ts2), "titles": [t for _, t in ts2[:5]]}
     
-    if not post_url:
-        return result
-    
-    post_html = await _fetch(post_url, timeout=12)
-    if not post_html:
-        result["post_fetch"] = "EMPTY"
-        return result
-    
-    result["post_length"] = len(post_html)
-    psoup = BeautifulSoup(post_html, "html.parser")
-    
-    fast_links = []
-    protector_links = []
-    for a in psoup.find_all("a", href=True):
-        h = a["href"]
-        t = a.get_text(strip=True)
-        if "fast-dl.one" in h:
-            fast_links.append({"url": h[:100], "text": t[:50]})
-        elif any(x in h for x in ["nexdrive", "vgmlinks", "hubcloud", "vcloud"]):
-            protector_links.append({"url": h[:100], "text": t[:50]})
-    
-    result["fast_dl_links"] = fast_links[:5]
-    result["protector_links"] = protector_links[:5]
+    # Test DLE on vegamovies4u.co.in
+    dle = await _search_dle("https://vegamovies4u.co.in", q, timeout=12)
+    if dle:
+        result["dle_4u"] = {"length": len(dle), "has_post_item": "post-item" in dle}
+        post_url = _find_post_in_html(dle, qw, "", "https://vegamovies4u.co.in")
+        result["dle_4u_post"] = post_url[:100] if post_url else None
+    else:
+        result["dle_4u"] = "EMPTY"
     
     return result
 
