@@ -640,6 +640,16 @@ def resolve_any(url: str, quality: str = "HD", referer: str = "") -> list[dict]:
                 return results
 
     if "direct-dl.lol" in host:
+        from urllib.parse import parse_qs, urlparse as _urlparse
+        parsed_dl = _urlparse(url)
+        qs = parse_qs(parsed_dl.query)
+        link_param = qs.get("link", [""])[0]
+        if link_param and link_param.startswith("http"):
+            decoded_link = unquote(link_param) if "%2F" in link_param or "%3A" in link_param else link_param
+            if "googleusercontent" in decoded_link or ".mp4" in decoded_link or ".mkv" in decoded_link or ".m3u8" in decoded_link:
+                fmt = "mkv" if ".mkv" in decoded_link else "mp4"
+                return [{"url": decoded_link, "quality": quality, "provider": "DirectDL", "format": fmt}]
+
         final_url, html = _fetch_cffi(url, timeout=10)
         video_links = re.findall(r'"(https?://[^"]*googleusercontent[^"]*)"', html or "")
         if not video_links:
