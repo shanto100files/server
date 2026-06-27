@@ -1,4 +1,4 @@
-import re, json, base64, time
+import asyncio, re, json, base64, time
 from urllib.parse import unquote, quote_plus
 from bs4 import BeautifulSoup
 from client import async_cf_get, async_cf_post
@@ -396,97 +396,47 @@ async def _vegamovies_inner(title, tmdb_id="", season=0, episode=0, year="", med
     soup = BeautifulSoup(post_html, "html.parser")
     final = []
     seen = set()
+
+    from providers.auto_resolver import resolve_any, is_direct_streamable
+
     for a in soup.find_all("a", href=True):
         h = a["href"]
         t = a.get_text(strip=True)
         if not h or "#" in h or not h.startswith("http"):
             continue
+
+        # Skip fast-dl.one links (Turnstile blocked)
         if "fast-dl.one" in h:
-            if h in seen:
-                continue
-            seen.add(h)
-            combined = t + " " + unquote(h)
-            quality = "HD"
-            for q in ["2160p", "4K", "1080p", "720p", "480p"]:
-                if q.lower() in combined.lower():
-                    quality = q
-                    break
-            if quality == "HD" and t:
-                tl = t.lower()
-                if "1080" in tl:
-                    quality = "1080p"
-                elif "720" in tl:
-                    quality = "720p"
-                elif "480" in tl:
-                    quality = "480p"
-                elif "2160" in tl or "4k" in tl:
-                    quality = "4K"
-            fmt = "mkv" if ".mkv" in h else "mp4"
-            final.append({"url": h, "quality": quality, "provider": "VegaMovies", "format": fmt})
             continue
+
+        # Only process protector/wrapper links
         if not any(x in h for x in ["nexdrive", "vgmlinks", "hubcloud", "vcloud", "gdflix", "drivebot"]):
             continue
+
         quality = "HD"
         combined = t + " " + unquote(h)
         for q in ["2160p", "4K", "1080p", "720p", "480p"]:
             if q.lower() in combined.lower():
                 quality = q
                 break
-        # Try to resolve the protector link directly
-        nex_html = await _fetch(h, timeout=10)
-        if not nex_html:
-            # Protector page CF blocked — return protector URL for browser resolution
-            final.append({"url": h, "quality": quality, "provider": "VegaMovies", "format": "mp4"})
-            continue
-        fast_match = re.search(r'href="(https?://fast-dl\.one/dl/[^"]+)"', nex_html)
-        if fast_match:
-            dl_url = fast_match.group(1)
-            if dl_url in seen:
-                continue
-            seen.add(dl_url)
-            combined = t + " " + unquote(dl_url)
-            quality = "HD"
-            for q in ["2160p", "4K", "1080p", "720p", "480p"]:
-                if q.lower() in combined.lower():
-                    quality = q
-                    break
-            fmt = "mkv" if ".mkv" in dl_url else "mp4"
-            final.append({"url": dl_url, "quality": quality, "provider": "VegaMovies", "format": fmt})
-            continue
-        # Try to find vcloud/hubcloud link inside the protector
-        vcloud_url = None
-        for m in re.finditer(r'href="(https?://vcloud\.zip/[^"]*)"', nex_html):
-            vcloud_url = m.group(1)
-            break
-        if not vcloud_url:
-            for m in re.finditer(r'href="(https?://[^"]*(?:hubcloud|vcloud)[^"]*)"', nex_html):
-                hh = m.group(1)
-                if "signup" not in hh and "tg/" not in hh and "bit.ly" not in hh:
-                    vcloud_url = hh
-                    break
-        if not vcloud_url:
-            # Try to find any useful link in the protector page
-            resolved = _parse_download_links(nex_html)
+
+        # Use auto_resolver to resolve HubCloud/GDFlix/DriveBot links
+        try:
+            resolved = await asyncio.to_thread(resolve_any, h, quality, post_url)
             for r in resolved:
-                url = r["url"]
-                if url in seen:
+                url = r.get("url", "")
+                if not url or url in seen:
                     continue
-                seen.add(url)
-                quality = r.get("quality", "HD")
-                fmt = "mkv" if ".mkv" in url else "mp4"
-                final.append({"url": url, "quality": quality, "provider": "VegaMovies", "format": fmt})
-            continue
-        resolved = await _resolve_vcloud(vcloud_url)
-        for r in resolved:
-            url = r["url"]
-            if url in seen:
-                continue
-            seen.add(url)
-            quality = r.get("quality", "HD")
-            for q in ["2160p", "4K", "1080p", "720p", "480p"]:
-                if q.lower() in url.lower():
-                    quality = q
-                    break
-            fmt = "mkv" if ".mkv" in url else "mp4"
-            final.append({"url": url, "quality": quality, "provider": "VegaMovies", "format": fmt})
+                if is_direct_streamable(url):
+                    seen.add(url)
+                    r_quality = r.get("quality", quality)
+                    for q in ["2160p", "4K", "1080p", "720p", "480p"]:
+                        if q.lower() in url.lower():
+                            r_quality = q
+                            break
+                    fmt = "mkv" if ".mkv" in url else "mp4"
+                    final.append({"url": url, "quality": r_quality, "provider": "VegaMovies", "format": fmt})
+        except Exception:
+            pass
+
     return final[:10]
