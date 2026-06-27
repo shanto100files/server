@@ -149,15 +149,15 @@ def _run_cinefreak_scraper():
         loop = _aio.new_event_loop()
         _aio.set_event_loop(loop)
         loop.run_until_complete(init_pre_scrape_table())
-        # Start with small batch, then increase
-        loop.run_until_complete(run_scraper(50))
+        # Start with 500 posts batch
+        loop.run_until_complete(run_scraper(500))
         print("[CineFreak Scraper] Initial batch done")
         # Keep running periodically
         import time as _time
         while True:
             _time.sleep(3600)  # Wait 1 hour
             try:
-                loop.run_until_complete(run_scraper(20))
+                loop.run_until_complete(run_scraper(50))
                 print("[CineFreak Scraper] Hourly refresh done")
             except Exception as e:
                 print(f"[CineFreak Scraper] Refresh error: {e}")
@@ -834,7 +834,50 @@ async def trigger_cinefreak_scraper():
 
 async def _run_scraper_now():
     from providers.cinefreak_scraper import run_scraper
-    await run_scraper(50)
+    await run_scraper(500)
+
+@app.get("/admin/cinefreak-posts")
+async def list_cinefreak_posts():
+    """List all scraped cinefreak posts with links."""
+    import aiosqlite
+    import json
+    db_path = os.path.join(os.path.dirname(__file__), "cache.db")
+    posts = []
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT url, title, year, language, quality, cinecloud_links FROM cinefreak_posts ORDER BY last_scraped DESC LIMIT 100") as cursor:
+            async for row in cursor:
+                links = json.loads(row[5]) if row[5] else []
+                posts.append({
+                    "url": row[0],
+                    "title": row[1],
+                    "year": row[2],
+                    "language": row[3],
+                    "quality": row[4],
+                    "links_count": len(links)
+                })
+    return {"total": len(posts), "posts": posts}
+
+@app.get("/admin/cinefreak-posts/{url:path}")
+async def get_cinefreak_post_details(url: str):
+    """Get details of a specific scraped post."""
+    import aiosqlite
+    import json
+    db_path = os.path.join(os.path.dirname(__file__), "cache.db")
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT * FROM cinefreak_posts WHERE url = ?", (url,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {
+                    "url": row[0],
+                    "title": row[1],
+                    "year": row[2],
+                    "language": row[3],
+                    "genre": row[4],
+                    "imdb_rating": row[5],
+                    "quality": row[6],
+                    "cinecloud_links": json.loads(row[7]) if row[7] else []
+                }
+    return {"error": "Post not found"}
 
 import hashlib
 import json
