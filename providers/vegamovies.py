@@ -42,12 +42,12 @@ async def _resolve_vcloud(url, retries=3):
     
     html = None
     for attempt in range(retries):
-        html = await _fetch(url, timeout=12)
+        # Fetch WITHOUT Referer (vcloud.zip blocks wrong referers)
+        html = await async_cf_get(url, timeout=12)
         if html and len(html) > 1000:
             break
         if attempt < retries - 1:
-            await asyncio.sleep(1.0 * (attempt + 1))
-            # Reset session for this domain on retry
+            await asyncio.sleep(1.5 * (attempt + 1))
             try:
                 from client import _session_lock, _domain_async_sessions
                 from urllib.parse import urlparse
@@ -73,11 +73,11 @@ async def _resolve_vcloud(url, retries=3):
             if token_url.startswith("http"):
                 token_html = None
                 for attempt in range(retries):
-                    token_html = await _fetch(token_url, timeout=12)
-                    if token_html and len(token_html) > 1000:
+                    token_html = await async_cf_get(token_url, timeout=12)
+                    if token_html and len(token_html) > 500:
                         break
                     if attempt < retries - 1:
-                        await asyncio.sleep(1.0 * (attempt + 1))
+                        await asyncio.sleep(1.5 * (attempt + 1))
                         try:
                             from client import _session_lock, _domain_async_sessions
                             from urllib.parse import urlparse
