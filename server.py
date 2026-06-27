@@ -139,6 +139,30 @@ async def startup():
     threading.Thread(target=_cleanup_link_cache, daemon=True).start()
     threading.Thread(target=_preload_sitemaps, daemon=True).start()
     threading.Thread(target=_check_warp_proxy, daemon=True).start()
+    threading.Thread(target=_run_cinefreak_scraper, daemon=True).start()
+
+def _run_cinefreak_scraper():
+    """Run CineFreak pre-scraper in background."""
+    try:
+        import asyncio as _aio
+        from providers.cinefreak_scraper import run_scraper, init_pre_scrape_table
+        loop = _aio.new_event_loop()
+        _aio.set_event_loop(loop)
+        loop.run_until_complete(init_pre_scrape_table())
+        # Start with small batch, then increase
+        loop.run_until_complete(run_scraper(50))
+        print("[CineFreak Scraper] Initial batch done")
+        # Keep running periodically
+        import time as _time
+        while True:
+            _time.sleep(3600)  # Wait 1 hour
+            try:
+                loop.run_until_complete(run_scraper(20))
+                print("[CineFreak Scraper] Hourly refresh done")
+            except Exception as e:
+                print(f"[CineFreak Scraper] Refresh error: {e}")
+    except Exception as e:
+        print(f"[CineFreak Scraper] Error: {e}")
 
 def _check_warp_proxy():
     """Check if Cloudflare WARP proxy is running for MLSBD CF bypass."""
@@ -794,6 +818,23 @@ async def trigger_discovery():
 async def trigger_health_check():
     threading.Thread(target=lambda: check_all_domains(), daemon=True).start()
     return {"status": "health_check_started"}
+
+@app.get("/admin/cinefreak-scraper")
+async def cinefreak_scraper_status():
+    from providers.cinefreak_scraper import get_stats
+    return get_stats()
+
+@app.post("/admin/cinefreak-scraper/run")
+async def trigger_cinefreak_scraper():
+    from providers.cinefreak_scraper import get_stats
+    if get_stats().get("running"):
+        return {"status": "already_running"}
+    threading.Thread(target=lambda: asyncio.run(_run_scraper_now()), daemon=True).start()
+    return {"status": "started"}
+
+async def _run_scraper_now():
+    from providers.cinefreak_scraper import run_scraper
+    await run_scraper(50)
 
 import hashlib
 import json

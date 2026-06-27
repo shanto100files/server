@@ -1,6 +1,8 @@
 import re
 import base64
 import asyncio
+import json
+import os
 from urllib.parse import quote as urlquote
 from bs4 import BeautifulSoup
 from client import async_cf_get
@@ -9,6 +11,74 @@ from providers.auto_resolver import resolve_any
 
 CINEFREAK_DOMAINS = ["https://cinefreak.net", "https://cinefreak.nl", "https://cinefreak.site"]
 CINECLOUD_BASE = "https://new5.cinecloud.site"
+
+# Pre-scraped data search
+async def _search_pre_scraped(title: str) -> list[dict]:
+    """Search pre-scraped cinefreak posts in database."""
+    try:
+        import aiosqlite
+        db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache.db")
+        results = []
+        async with aiosqlite.connect(db_path) as db:
+            search_term = f"%{title.lower()}%"
+            async with db.execute(
+                "SELECT url, title, year, language, genre, imdb_rating, quality, cinecloud_links FROM cinefreak_posts WHERE title LIKE ? LIMIT 5",
+                (search_term,)
+            ) as cursor:
+                async for row in cursor:
+                    cinecloud_links = json.loads(row[7]) if row[7] else []
+                    if cinecloud_links:
+                        results.append({
+                            "url": row[0],
+                            "title": row[1],
+                            "year": row[2],
+                            "language": row[3],
+                            "genre": row[4],
+                            "imdb_rating": row[5],
+                            "quality": row[6],
+                            "cinecloud_links": cinecloud_links
+                        })
+        return results
+    except Exception as e:
+        return []
+
+async def _resolve_from_pre_scraped(post: dict, season: int = 0, episode: int = 0) -> list[dict]:
+    """Resolve cinecloud links from pre-scraped data."""
+    sources = []
+    cinecloud_links = post.get("cinecloud_links", [])
+    
+    # Filter by quality if needed
+    for link in cinecloud_links:
+        url = link.get("url", "")
+        quality = link.get("quality", "HD")
+        link_type = link.get("type", "download")
+        
+        if not url:
+            continue
+        
+        # Resolve cinecloud link
+        try:
+            dl_links, meta = await _resolve_cinecloud(url)
+            for dl in dl_links:
+                sources.append({
+                    "url": dl,
+                    "quality": meta.get("quality", quality),
+                    "provider": "CineFreak",
+                    "format": meta.get("format", "mp4"),
+                    "fileSize": meta.get("fileSize", ""),
+                    "language": meta.get("language", post.get("language", "")),
+                    "filename": meta.get("filename", ""),
+                })
+        except:
+            # If resolution fails, add the intermediate link
+            sources.append({
+                "url": url,
+                "quality": quality,
+                "provider": "CineFreak",
+                "format": "mp4",
+            })
+    
+    return sources
 
 async def _get_domain() -> str:
     for domain in CINEFREAK_DOMAINS:
@@ -164,6 +234,20 @@ def _get_card_episode_range(card) -> tuple[int, int]:
 
 async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, episode: int = 0) -> list[dict]:
     sources = []
+    
+    # STEP 1: Try pre-scraped data first (fast)
+    try:
+        pre_scraped = await _search_pre_scraped(title)
+        if pre_scraped:
+            for post in pre_scraped:
+                resolved = await _resolve_from_pre_scraped(post, season, episode)
+                sources.extend(resolved)
+            if sources:
+                return sources
+    except:
+        pass
+    
+    # STEP 2: Fall back to on-demand scraping (slow)
     domain = await _get_domain()
     query = f"{title} Season {season}" if media_type == "tv" and season > 0 else title
 
@@ -174,7 +258,6 @@ async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, 
         return sources
 
     try:
-        import json
         data = json.loads(search_html)
         results = data.get("results", [])
         if not results:
