@@ -719,7 +719,7 @@ async def health():
 async def debug_vegamovies(q: str = "RRR"):
     import re, time as _time
     from bs4 import BeautifulSoup
-    from providers.vegamovies import _search_typesense, _search_dle, _find_post_in_html, _fetch, _match_title, _resolve_vcloud
+    from providers.vegamovies import _search_typesense, _search_dle, _find_post_in_html, _fetch, _match_title, _resolve_vcloud, _parse_download_links
     qw = set(q.lower().split())
     result = {}
     
@@ -733,56 +733,26 @@ async def debug_vegamovies(q: str = "RRR"):
             if post_html:
                 result["post_length"] = len(post_html)
                 psoup = BeautifulSoup(post_html, "html.parser")
-                fast = [a["href"] for a in psoup.find_all("a", href=True) if "fast-dl.one" in a["href"]]
                 prot = [a["href"] for a in psoup.find_all("a", href=True) if any(x in a["href"] for x in ["vgmlinks", "nexdrive", "hubcloud", "vcloud"])]
-                result["fast_dl_count"] = len(fast)
                 result["protector_count"] = len(prot)
-                result["protector_urls"] = [u[:100] for u in prot[:3]]
-                # Check what's inside the first protector
                 if prot:
+                    result["protector_url"] = prot[0][:100]
                     ph2 = await _fetch(prot[0], timeout=10)
                     if ph2:
-                        result["protector_page_len"] = len(ph2)
-                        result["protector_has_fastdl"] = "fast-dl" in ph2
-                        fast2 = re.findall(r'href="(https?://fast-dl[^"]+)"', ph2)
-                        result["protector_fastdl_links"] = [u[:100] for u in fast2[:3]]
-                        vcloud2 = re.findall(r'href="(https?://[^"]*(?:vcloud|hubcloud)[^"]*)"', ph2)
-                        result["protector_vcloud_links"] = [u[:100] for u in vcloud2[:3]]
-                    else:
-                        result["protector_page"] = "EMPTY"
-                # Test vcloud resolution
-                vcloud_links = re.findall(r'href="(https?://vcloud\.zip/[^"]*)"', ph2)
-                if vcloud_links:
-                    vcloud_url = vcloud_links[0]
-                    result["vcloud_url"] = vcloud_url[:100]
-                    resolved = await _resolve_vcloud(vcloud_url)
-                    result["vcloud_resolved"] = len(resolved)
-                    result["vcloud_resolved_urls"] = [{"url": r["url"][:80], "quality": r.get("quality", "?")} for r in resolved[:3]]
-            else:
-                result["post_fetch"] = "EMPTY"
+                        result["protector_len"] = len(ph2)
+                        vcloud_links = re.findall(r'href="(https?://vcloud\.zip/[^"]*)"', ph2)
+                        result["vcloud_in_protector"] = len(vcloud_links)
+                        if vcloud_links:
+                            vcloud_url = vcloud_links[0]
+                            result["vcloud_url"] = vcloud_url[:100]
+                            resolved = await _resolve_vcloud(vcloud_url)
+                            result["vcloud_resolved"] = len(resolved)
+                            result["vcloud_results"] = [{"url": r["url"][:80], "q": r.get("quality","?")} for r in resolved[:3]]
+                        # Also try direct link parse on protector page
+                        direct = _parse_download_links(ph2)
+                        result["protector_direct_links"] = len(direct)
             break
     result["typesense_time"] = round(_time.time() - t0, 2)
-    
-    t1 = _time.time()
-    ts2 = await _search_typesense("https://vegamovies4u.co.in", q)
-    result["typesense_4u"] = {"hits": len(ts2)}
-    result["typesense_4u_time"] = round(_time.time() - t1, 2)
-    
-    t2 = _time.time()
-    dle = await _search_dle("https://vegamovies4u.co.in", q, timeout=12)
-    if dle:
-        post_url = _find_post_in_html(dle, qw, "", "https://vegamovies4u.co.in")
-        result["dle_4u"] = {"length": len(dle), "post_url": post_url[:100] if post_url else None}
-        if post_url:
-            ph = await _fetch(post_url, timeout=12)
-            if ph:
-                result["dle_post_length"] = len(ph)
-                fast = [a["href"] for a in BeautifulSoup(ph, "html.parser").find_all("a", href=True) if "fast-dl.one" in a["href"]]
-                result["dle_fast_dl_count"] = len(fast)
-    else:
-        result["dle_4u"] = "EMPTY"
-    result["dle_time"] = round(_time.time() - t2, 2)
-    
     return result
 
 @app.get("/admin/link-cache")

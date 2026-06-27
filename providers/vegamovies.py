@@ -36,46 +36,135 @@ async def _get_domain():
     return VEGAMOVIES_DOMAINS[0]
 
 
-async def _resolve_vcloud(url):
-    html = await _fetch(url, timeout=10)
+async def _resolve_vcloud(url, retries=3):
+    """Resolve vcloud/hubcloud protector pages to get actual download links."""
+    import asyncio
+    
+    html = None
+    for attempt in range(retries):
+        html = await _fetch(url, timeout=12)
+        if html and len(html) > 1000:
+            break
+        if attempt < retries - 1:
+            await asyncio.sleep(1.0 * (attempt + 1))
+            # Reset session for this domain on retry
+            try:
+                from client import _session_lock, _domain_async_sessions
+                from urllib.parse import urlparse
+                with _session_lock:
+                    _domain_async_sessions.pop(urlparse(url).netloc, None)
+            except:
+                pass
+    
     if not html:
         return []
-    m = re.search(r'var\s+url\s*=\s*atob\(atob\(["\']([^"\']+)["\']\)\)', html)
-    if not m:
-        return []
-    b64 = m.group(1)
-    while len(b64) % 4 != 0:
-        b64 += "="
-    try:
-        once = base64.b64decode(b64).decode()
-        token_url = base64.b64decode(once).decode()
-    except:
-        return []
-    token_html = await _fetch(token_url, timeout=10)
-    if not token_html:
-        return []
+    
     results = []
-    soup = BeautifulSoup(token_html, "html.parser")
+    
+    # Method 1: atob(atob(...)) → token URL → parse page
+    m = re.search(r'atob\s*\(\s*atob\s*\(\s*["\']([^"\']+)["\']', html)
+    if m:
+        b64 = m.group(1)
+        while len(b64) % 4 != 0:
+            b64 += "="
+        try:
+            once = base64.b64decode(b64).decode()
+            token_url = base64.b64decode(once).decode()
+            if token_url.startswith("http"):
+                token_html = None
+                for attempt in range(retries):
+                    token_html = await _fetch(token_url, timeout=12)
+                    if token_html and len(token_html) > 1000:
+                        break
+                    if attempt < retries - 1:
+                        await asyncio.sleep(1.0 * (attempt + 1))
+                        try:
+                            from client import _session_lock, _domain_async_sessions
+                            from urllib.parse import urlparse
+                            with _session_lock:
+                                _domain_async_sessions.pop(urlparse(token_url).netloc, None)
+                        except:
+                            pass
+                if token_html:
+                    results = _parse_download_links(token_html)
+        except:
+            pass
+    
+    # Method 2: look for direct download links in the page itself
+    if not results:
+        results = _parse_download_links(html)
+    
+    # Method 3: look for hubcloud.foo/tg/go links
+    if not results:
+        tg_match = re.search(r'href="(https?://hubcloud\.foo/tg/go\?id=[^"]+)"', html)
+        if tg_match:
+            results.append({"url": tg_match.group(1), "quality": "HD"})
+    
+    return results[:10]
+
+
+def _parse_download_links(html):
+    """Parse HTML for download links (h2 tags, buttons, direct links)."""
+    results = []
+    seen = set()
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # Look for links in h2 tags (vcloud/hubcloud style)
     for h2 in soup.find_all("h2"):
         for a in h2.find_all_next("a", href=True):
             h = a["href"]
             t = a.get_text(strip=True)
             if not h.startswith("http"):
                 continue
-            if any(x in h for x in [".css", ".js", "fonts", "favicon"]):
+            if any(x in h for x in [".css", ".js", "fonts", "favicon", "cloudflare"]):
                 continue
+            if h in seen:
+                continue
+            seen.add(h)
             quality = "HD"
-            combined = t + " " + unquote(h)
+            combined = (t + " " + unquote(h)).lower()
             for q in ["2160p", "4K", "1080p", "720p", "480p"]:
-                if q.lower() in combined.lower():
+                if q.lower() in combined:
                     quality = q
                     break
-            if "FSLv2" in t or "FSL" in t or "10Gbps" in t or "Mega" in t or "Buzz" in t or "Pixeldrain" in t:
+            if any(x in t for x in ["FSLv2", "FSL", "10Gbps", "Mega", "Buzz", "Pixeldrain",
+                                     "Download", "Link", "Click"]):
                 results.append({"url": h, "quality": quality})
                 if len(results) >= 6:
+                    return results
+    
+    # Look for btn/download links
+    for a in soup.find_all("a", href=True, class_=re.compile(r"btn|download|primary", re.I)):
+        h = a["href"]
+        t = a.get_text(strip=True)
+        if not h.startswith("http"):
+            continue
+        if any(x in h for x in [".css", ".js", "fonts", "favicon", "cloudflare", "telegram"]):
+            continue
+        if h in seen:
+            continue
+        if any(x in t.lower() for x in ["download", "get link", "click here"]):
+            seen.add(h)
+            quality = "HD"
+            combined = (t + " " + unquote(h)).lower()
+            for q in ["2160p", "4K", "1080p", "720p", "480p"]:
+                if q.lower() in combined:
+                    quality = q
                     break
-        if results:
-            break
+            results.append({"url": h, "quality": quality})
+            if len(results) >= 6:
+                return results
+    
+    # Look for any cloud storage links (gdrive, mega, pixeldrain, etc.)
+    cloud_pattern = re.compile(r'href="(https?://(?:drive\.google|mega\.nz|mega\.co|pixeldrain|streamtape|streamlare| fichier|1fichier|clicknupload|hexupload|krakenfiles|streamWish|vidcloud|doodstream|evoload|filemoon)[^"]*)"', re.I)
+    for match in cloud_pattern.finditer(html):
+        h = match.group(1)
+        if h not in seen:
+            seen.add(h)
+            results.append({"url": h, "quality": "HD"})
+            if len(results) >= 6:
+                return results
+    
     return results
 
 
@@ -246,8 +335,6 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
 
     # Strategy 3: DLE search on vegamovies4u.co.in
     if not post_url:
-        import asyncio, random
-        await asyncio.sleep(random.uniform(0.3, 1.0))
         dle_html = await _search_dle("https://vegamovies4u.co.in", title, timeout=12)
         if dle_html:
             post_url = _find_post_in_html(dle_html, qw, year, "https://vegamovies4u.co.in")
@@ -300,8 +387,9 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
             fmt = "mkv" if ".mkv" in h else "mp4"
             final.append({"url": h, "quality": quality, "provider": "VegaMovies", "format": fmt})
             continue
-        if not any(x in h for x in ["nexdrive", "vgmlinks", "hubcloud", "vcloud"]):
+        if not any(x in h for x in ["nexdrive", "vgmlinks", "hubcloud", "vcloud", "gdflix", "drivebot"]):
             continue
+        # Try to resolve the protector link directly
         nex_html = await _fetch(h, timeout=10)
         if not nex_html:
             continue
@@ -320,6 +408,7 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
             fmt = "mkv" if ".mkv" in dl_url else "mp4"
             final.append({"url": dl_url, "quality": quality, "provider": "VegaMovies", "format": fmt})
             continue
+        # Try to find vcloud/hubcloud link inside the protector
         vcloud_url = None
         for m in re.finditer(r'href="(https?://vcloud\.zip/[^"]*)"', nex_html):
             vcloud_url = m.group(1)
@@ -331,6 +420,16 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
                     vcloud_url = hh
                     break
         if not vcloud_url:
+            # Try to find any useful link in the protector page
+            resolved = _parse_download_links(nex_html)
+            for r in resolved:
+                url = r["url"]
+                if url in seen:
+                    continue
+                seen.add(url)
+                quality = r.get("quality", "HD")
+                fmt = "mkv" if ".mkv" in url else "mp4"
+                final.append({"url": url, "quality": quality, "provider": "VegaMovies", "format": fmt})
             continue
         resolved = await _resolve_vcloud(vcloud_url)
         for r in resolved:
