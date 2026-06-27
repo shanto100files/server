@@ -354,12 +354,56 @@ def resolve_protector_auto(url: str, quality: str = "HD") -> list[dict]:
     return results
 
 
+def _resolve_nexdrive(url: str, quality: str = "HD", referer: str = "") -> list[dict]:
+    """Resolve nexdrive.help pages — extract fast-dl.one links and resolve."""
+    final_url, html = _fetch_cffi(url, timeout=12)
+    if not html:
+        return []
+
+    results = []
+    seen = set()
+
+    fast_dl_links = re.findall(r'href="(https?://[^"]*fast-dl\.one[^"]*)"', html)
+    for dl in fast_dl_links:
+        if dl in seen:
+            continue
+        seen.add(dl)
+        resolved = resolve_any(dl, quality=quality, referer=url)
+        for r in resolved:
+            if r["url"] not in seen:
+                seen.add(r["url"])
+                results.append(r)
+
+    if not results:
+        gdflix_links = re.findall(r'href="(https?://[^"]*gdflix[^"]*)"', html)
+        for gl in gdflix_links:
+            g_resolved = resolve_gdflix_auto(gl, quality=quality, referer=url)
+            for g in g_resolved:
+                if g["url"] not in seen:
+                    seen.add(g["url"])
+                    results.append(g)
+
+    if not results:
+        hubcloud_links = re.findall(r'href="(https?://[^"]*hubcloud[^"]*)"', html)
+        for hl in hubcloud_links:
+            h_resolved = resolve_hubcloud_auto(hl, quality=quality)
+            for h in h_resolved:
+                if h["url"] not in seen:
+                    seen.add(h["url"])
+                    results.append(h)
+
+    return results
+
+
 def resolve_any(url: str, quality: str = "HD", referer: str = "") -> list[dict]:
     if is_direct_streamable(url):
         fmt = "mkv" if ".mkv" in url else "mp4"
         return [{"url": url, "quality": quality, "provider": "Direct", "format": fmt}]
 
     host = (urlparse(url).hostname or "").lower()
+
+    if "nexdrive" in host:
+        return _resolve_nexdrive(url, quality=quality, referer=referer)
 
     if "gdflix" in host:
         return resolve_gdflix_auto(url, quality=quality, referer=referer)

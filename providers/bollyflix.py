@@ -5,7 +5,7 @@ from client import async_cf_get
 from urllib.parse import urlparse, urljoin
 from providers.auto_resolver import title_matches_search, resolve_any
 
-BOLLYFLIX_DOMAINS = ["https://bollyflix.med", "https://bollyflix.run"]
+BOLLYFLIX_DOMAINS = ["https://bollyflix.to", "https://bollyflix.med"]
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
 
 
@@ -112,7 +112,7 @@ async def _extract_links(html: str, post_url: str = "") -> list[dict]:
         host_lower = (urlparse(href).hostname or "").lower()
         if any(x in href for x in INTERMEDIATE) or any(x in host_lower for x in INTERMEDIATE):
             loop = asyncio.get_event_loop()
-            resolved = await loop.run_in_executor(None, lambda h=href, q=quality: resolve_any(h, quality=q, referer=best.get("url", "")))
+            resolved = await loop.run_in_executor(None, lambda h=href, q=quality: resolve_any(h, quality=q, referer=post_url))
             if resolved:
                 for r in resolved:
                     r["provider"] = "BollyFlix"

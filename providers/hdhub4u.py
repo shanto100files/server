@@ -2,7 +2,9 @@ import re
 import time
 import threading
 import asyncio
-from bs4 import BeautifulSoup
+import warnings
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from client import async_cf_get
 from providers.hubcloud import extract_hubcloud
 from providers.gdflix import resolve_gdflix
@@ -28,13 +30,13 @@ async def _load_sitemap() -> list[str]:
             index_r = await async_cf_get(f"{domain}/sitemap.xml", timeout=12)
             if not index_r:
                 continue
-            soup = BeautifulSoup(index_r, "xml.etree.ElementTree")
-            post_sitemaps = [loc.text for loc in soup.select("loc") if "post-sitemap" in loc.text]
+            soup = BeautifulSoup(index_r, "html.parser")
+            post_sitemaps = [loc.text for loc in soup.find_all("loc") if "post-sitemap" in loc.text]
             for sm_url in post_sitemaps:
                 sm_html = await async_cf_get(sm_url, timeout=12)
                 if sm_html:
-                    sm_soup = BeautifulSoup(sm_html, "xml.etree.ElementTree")
-                    urls.extend(loc.text for loc in sm_soup.select("loc"))
+                    sm_soup = BeautifulSoup(sm_html, "html.parser")
+                    urls.extend(loc.text for loc in sm_soup.find_all("loc"))
             if urls:
                 break
         except Exception:

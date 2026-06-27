@@ -423,19 +423,24 @@ async def _vegamovies_inner(title, tmdb_id="", season=0, episode=0, year="", med
         # Use auto_resolver to resolve HubCloud/GDFlix/DriveBot links
         try:
             resolved = await asyncio.to_thread(resolve_any, h, quality, post_url)
-            for r in resolved:
-                url = r.get("url", "")
-                if not url or url in seen:
-                    continue
-                if is_direct_streamable(url):
-                    seen.add(url)
-                    r_quality = r.get("quality", quality)
-                    for q in ["2160p", "4K", "1080p", "720p", "480p"]:
-                        if q.lower() in url.lower():
-                            r_quality = q
-                            break
-                    fmt = "mkv" if ".mkv" in url else "mp4"
-                    final.append({"url": url, "quality": r_quality, "provider": "VegaMovies", "format": fmt})
+            if resolved:
+                for r in resolved:
+                    url = r.get("url", "")
+                    if not url or url in seen:
+                        continue
+                    if is_direct_streamable(url):
+                        seen.add(url)
+                        r_quality = r.get("quality", quality)
+                        for q in ["2160p", "4K", "1080p", "720p", "480p"]:
+                            if q.lower() in url.lower():
+                                r_quality = q
+                                break
+                        fmt = "mkv" if ".mkv" in url else "mp4"
+                        final.append({"url": url, "quality": r_quality, "provider": "VegaMovies", "format": fmt})
+            elif h not in seen:
+                seen.add(h)
+                fmt = "mkv" if ".mkv" in t else "mp4"
+                final.append({"url": h, "quality": quality, "provider": "VegaMovies", "format": fmt})
         except Exception:
             pass
 

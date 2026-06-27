@@ -91,27 +91,41 @@ async def _resolve_hubcloud(hub_url):
 
 async def fourkhd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
     domain = await _get_domain()
-    html = await _fetch(f"{domain}/?s={title}", timeout=10)
-    if not html:
-        return []
-    soup = BeautifulSoup(html, "html.parser")
     qw = set(title.lower().split())
     post_url = None
-    best_score = 0
-    for a in soup.find_all("a", href=True):
-        h = a["href"]
-        if not h.startswith("/") or "/?s=" in h:
-            continue
-        if not re.search(r"(movie|series)-\d+/", h):
-            continue
-        slug = h.rstrip("/").split("/")[-1]
-        slug_words = set(re.sub(r"-\d+$", "", slug).replace("-", " ").split())
-        overlap = qw & slug_words
-        if overlap:
-            score = len(overlap) / len(qw) * 100
-            if score > best_score:
-                best_score = score
+
+    html = await _fetch(f"{domain}/?s={title}", timeout=10)
+    if html:
+        soup = BeautifulSoup(html, "html.parser")
+        for a in soup.find_all("a", href=True):
+            h = a["href"]
+            if not h.startswith("/") or "/?s=" in h:
+                continue
+            if not re.search(r"(movie|series)-\d+/", h):
+                continue
+            slug = h.rstrip("/").split("/")[-1]
+            slug_words = set(re.sub(r"-\d+$", "", slug).replace("-", " ").split())
+            overlap = qw & slug_words
+            if overlap:
                 post_url = h
+                break
+
+    if not post_url:
+        q_plus = title.replace(" ", "+")
+        dle_html = await _fetch(f"{domain}/?do=search&subaction=search&story={q_plus}", timeout=10)
+        if dle_html:
+            soup = BeautifulSoup(dle_html, "html.parser")
+            for a_tag in soup.find_all("a", href=True):
+                href = a_tag["href"]
+                if not re.search(r"(movie|series)-\d+/", href):
+                    continue
+                slug = href.rstrip("/").split("/")[-1]
+                slug_words = set(re.sub(r"-\d+$", "", slug).replace("-", " ").split())
+                overlap = qw & slug_words
+                if overlap:
+                    post_url = href
+                    break
+
     if not post_url:
         return []
     post_html = await _fetch(domain + post_url, timeout=12)
@@ -120,33 +134,46 @@ async def fourkhd(title, tmdb_id="", season=0, episode=0, year="", media_type=""
     soup = BeautifulSoup(post_html, "html.parser")
     seen = set()
     final = []
+    from providers.auto_resolver import resolve_any, is_direct_streamable
     for a in soup.find_all("a", href=True):
         h = a["href"]
-        if "hubcloud" not in h:
+        t = a.get_text(strip=True)
+        if not h.startswith("http"):
+            continue
+        if any(x in h for x in [".css", ".js", "cdn.", "fonts"]):
             continue
         if h in seen:
             continue
+        if not any(x in h for x in ["hubcloud", "gdflix", "drivebot", "hubdrive", "fast-dl", "nexdrive"]):
+            continue
         seen.add(h)
-        resolved = await _resolve_hubcloud(h)
-        for r in resolved:
-            url = r["url"]
-            if url in seen:
-                continue
-            seen.add(url)
-            quality = r.get("quality", "HD")
-            for q in ["2160p", "4K", "1080p", "720p", "480p"]:
-                if q.lower() in url.lower():
-                    quality = q
-                    break
-            fmt = "zip" if ".zip" in url else ("mkv" if ".mkv" in url else "mp4")
-            entry = {"url": url, "quality": quality, "provider": "4KHD", "format": fmt}
-            meta = r.get("metadata")
-            if meta:
-                if meta.get("fileSize"):
-                    entry["fileSize"] = meta["fileSize"]
-                if meta.get("filename"):
-                    entry["filename"] = meta["filename"]
-                if meta.get("fileType"):
-                    entry["fileType"] = meta["fileType"]
-            final.append(entry)
+        quality = "HD"
+        combined = (t + " " + unquote(h)).lower()
+        for q in ["2160p", "4K", "1080p", "720p", "480p"]:
+            if q.lower() in combined:
+                quality = q
+                break
+        try:
+            resolved = await asyncio.to_thread(resolve_any, h, quality, post_url)
+            if resolved:
+                for r in resolved:
+                    url = r["url"]
+                    if url in seen:
+                        continue
+                    seen.add(url)
+                    entry = {"url": url, "quality": r.get("quality", quality), "provider": "4KHD", "format": "zip" if ".zip" in url else ("mkv" if ".mkv" in url else "mp4")}
+                    meta = r.get("metadata")
+                    if meta:
+                        if meta.get("fileSize"):
+                            entry["fileSize"] = meta["fileSize"]
+                        if meta.get("filename"):
+                            entry["filename"] = meta["filename"]
+                        if meta.get("fileType"):
+                            entry["fileType"] = meta["fileType"]
+                    final.append(entry)
+            elif h not in seen:
+                fmt = "zip" if ".zip" in h else ("mkv" if ".mkv" in h else "mp4")
+                final.append({"url": h, "quality": quality, "provider": "4KHD", "format": fmt})
+        except Exception:
+            pass
     return final[:10]
