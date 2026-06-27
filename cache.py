@@ -11,14 +11,15 @@ except ImportError:
 DB_PATH = os.path.join(os.path.dirname(__file__), "cache.db")
 
 PROVIDER_TTL = {
-    "cinefreak": 12 * 3600,
-    "gdflix": 2 * 3600,
-    "mlsbd": 6 * 3600,
-    "hdhub4u": 4 * 3600,
-    "movielinkbd": 6 * 3600,
-    "vegamovies": 4 * 3600,
-    "tmdb_search": 4 * 3600,
-    "sources": 4 * 3600,
+    "cinefreak": 18 * 3600,
+    "mlsbd": 8 * 3600,
+    "hdhub4u": 6 * 3600,
+    "southfreak": 6 * 3600,
+    "bollyflix": 6 * 3600,
+    "vegamovies": 6 * 3600,
+    "4khdhub": 6 * 3600,
+    "tmdb_search": 6 * 3600,
+    "sources": 6 * 3600,
 }
 
 _redis = None

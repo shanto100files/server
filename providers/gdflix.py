@@ -198,34 +198,3 @@ def _resolve_multiup(url: str, add_fn, quality: str = ""):
 
     except Exception:
         pass
-
-
-def extract_key_from_page(html: str) -> str:
-    m = re.search(r'"key"\s*[,:]\s*"([^"]+)"', html)
-    return m.group(1) if m else ""
-
-
-def extract_links_from_html(html: str, quality: str = "") -> list[dict]:
-    results = []
-    seen = set()
-
-    patterns = [
-        r'href="(https?://[^"]*(?:r2\.dev|r2\.cloudflarestorage)[^"]*)"',
-        r'href="(https?://[^"]*drive\.google\.com[^"]*)"',
-        r'href="(https?://[^"]*pixeldrain[^"]*)"',
-        r'"(https?://[^"]*(?:r2\.dev|r2\.cloudflarestorage)[^"]*)"',
-    ]
-
-    for pat in patterns:
-        for link in re.findall(pat, html):
-            link = html_unescape(link)
-            if link not in seen and _is_streamable(link):
-                seen.add(link)
-                results.append({
-                    "url": link,
-                    "quality": quality or "HD",
-                    "provider": "GDFlix",
-                    "format": "mkv",
-                })
-
-    return results

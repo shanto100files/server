@@ -3,7 +3,7 @@ import asyncio
 from bs4 import BeautifulSoup
 from client import async_cf_get
 from providers.gdflix import resolve_gdflix, _is_streamable
-from providers.auto_resolver import resolve_any, is_direct_streamable, content_matches, title_matches_search, score_content
+from providers.auto_resolver import resolve_any, title_matches_search, score_content
 
 MLSBD_DOMAINS = ["https://mlsbd.co", "https://mlsbd.net", "https://mlsbd.com"]
 

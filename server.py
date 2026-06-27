@@ -25,10 +25,8 @@ from providers.southfreak import southfreak
 from providers.bollyflix import bollyflix
 from providers.vegamovies import vegamovies
 from providers.fourkhd import fourkhd
-from providers.flixsearch import flixsearch
 from providers.domain_discovery import discover_deep
 from providers.domain_health import check_all_domains, get_all_status
-import providers.auto_resolver as auto_resolver
 from providers import anime as anime_provider
 
 
@@ -494,7 +492,7 @@ document.querySelectorAll('.p-chip').forEach(c=>{c.className='p-chip';});
 const meta=document.querySelector('.panel-meta');
 if(meta)meta.textContent=`Loading Season ${season} sources...`;
 
-const providers=['CineFreak','CineStream','HDHub4U','MLSBD','MovieLinkBD','CastleTV','VegaMovies','4KHD'];
+const providers=['CineFreak','HDHub4U','MLSBD','SouthFreak','BollyFlix','VegaMovies','4KHD'];
 const row=document.getElementById('providersRow');
 if(row){
 row.innerHTML='';
@@ -618,7 +616,7 @@ _evtSource.onerror=function(){if(_evtSource){_evtSource.close();_evtSource=null;
 }
 
 function _addProviderChips(){
-const providers=['CineFreak','CineStream','HDHub4U','MLSBD','MovieLinkBD','CastleTV','VegaMovies','4KHD'];
+const providers=['CineFreak','HDHub4U','MLSBD','SouthFreak','BollyFlix','VegaMovies','4KHD'];
 const row=document.getElementById('providersRow');
 providers.forEach(p=>{
 const c=document.createElement('span');
@@ -799,7 +797,6 @@ async def trigger_health_check():
 
 import hashlib
 import json
-import os
 
 ADMIN_EMAIL = "admin@cinepix.com"
 ADMIN_PASSWORD_HASH = hashlib.sha256("admin123".encode()).hexdigest()
@@ -848,7 +845,7 @@ async def admin_dashboard(request: Request):
     domains_list = domain_status.get("domains", []) if isinstance(domain_status, dict) else []
     working_domains = sum(1 for d in domains_list if d.get("status") == "online")
     
-    all_providers = ["CineFreak", "HDHub4U", "MLSBD", "SouthFreak", "BollyFlix"]
+    all_providers = ["CineFreak", "HDHub4U", "MLSBD", "SouthFreak", "BollyFlix", "VegaMovies", "4KHDHub"]
     active_providers = len([p for p in all_providers if p in provider_health and provider_health[p].get("success_rate", 0) > 0])
     if active_providers == 0:
         active_providers = len(all_providers)
@@ -874,7 +871,6 @@ async def admin_dashboard(request: Request):
 _startup_time = time.time()
 _request_stats = {"total": 0, "cache_hits": 0, "active": 0, "errors": 0, "total_sources": 0}
 _request_lock = threading.Lock()
-_recent_requests = []
 
 @app.get("/monitor/stats")
 async def monitor_stats():
@@ -882,7 +878,6 @@ async def monitor_stats():
     h, m, s2 = uptime_sec // 3600, (uptime_sec % 3600) // 60, uptime_sec % 60
     with _request_lock:
         stats = dict(_request_stats)
-        recent = list(_recent_requests)
     with _provider_lock:
         pstats = dict(_provider_stats)
     cache_hit_rate = round(stats["cache_hits"] / max(stats["total"], 1) * 100, 1)
@@ -897,7 +892,7 @@ async def monitor_stats():
     return {"uptime": f"{h:02d}:{m:02d}:{s2:02d}", "mem_cache_items": len(_mem_cache), "active_requests": stats["active"],
             "total_requests": stats["total"], "cache_hits": stats["cache_hits"], "cache_hit_rate": cache_hit_rate,
             "total_sources_delivered": stats["total_sources"], "avg_sources_per_request": avg_sources,
-            "providers": providers_out, "recent_requests": recent[-10:]}
+            "providers": providers_out, "recent_requests": []}
 
 @app.get("/monitor/loadtest")
 async def monitor_loadtest():
@@ -1034,35 +1029,6 @@ async def admin_providers(request: Request):
         })
     return {"providers": providers}
 
-@app.post("/api/admin/providers")
-async def admin_toggle_provider(request: Request):
-    token = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if not verify_admin_token(token):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    body = await request.json()
-    return {"status": "ok", "name": body.get("name"), "enabled": body.get("enabled")}
-
-@app.get("/api/admin/providers/test")
-async def admin_test_provider(request: Request, name: str = Query(...)):
-    token = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if not verify_admin_token(token):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    start = time.time()
-    try:
-        if name == "CineFreak":
-            from providers.cinefreak import cinefreak
-            result = await asyncio.get_event_loop().run_in_executor(executor, lambda: asyncio.run(cinefreak("The Batman 2022")))
-        elif name == "HDHub4U":
-            from providers.hdhub4u import hdhub4u
-            result = await asyncio.get_event_loop().run_in_executor(executor, lambda: asyncio.run(hdhub4u("The Batman 2022")))
-        else:
-            result = []
-        elapsed = round(time.time() - start, 2)
-        return {"success": len(result) > 0, "time": elapsed, "sources": len(result)}
-    except Exception as e:
-        return {"success": False, "error": str(e), "time": round(time.time() - start, 2), "sources": 0}
-
 @app.get("/api/admin/domains")
 async def admin_domains(request: Request):
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
@@ -1103,29 +1069,6 @@ async def admin_clear_cache(request: Request, clear: str = Query(default="all"))
             _mem_cache.clear()
     return {"status": "cleared"}
 
-@app.get("/api/admin/settings")
-async def admin_get_settings(request: Request):
-    token = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if not verify_admin_token(token):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    return {
-        "site_name": "CinePix",
-        "max_workers": "200",
-        "http_conns": "80",
-        "cache_ttl": "300",
-        "rate_limit": "60"
-    }
-
-@app.post("/api/admin/settings")
-async def admin_save_settings(request: Request):
-    token = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if not verify_admin_token(token):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    body = await request.json()
-    return {"status": "saved"}
-
 @app.get("/status")
 async def status():
     stats = await cache_stats()
@@ -1137,7 +1080,7 @@ async def status():
         "inflight_requests": len(_inflight),
         "rate_limit_ips": len(_rate_limit),
         "provider_health": get_provider_health(),
-        "providers": ["CineFreak", "HDHub4U", "MLSBD", "MovieLinkBD", "VegaMovies", "CastleTV", "CineStream", "4KHD"],
+        "providers": ["CineFreak", "HDHub4U", "MLSBD", "SouthFreak", "BollyFlix", "VegaMovies", "4KHD"],
     }
 
 # ===== Batch Fetcher: TMDB 2025 Content =====
@@ -1197,11 +1140,6 @@ async def batch_scrape_endpoint(request: Request):
             results.append({"title": item["title"], "error": str(e)})
         await asyncio.sleep(0.5)
     return {"scraped": len(results), "results": results}
-
-@app.get("/clear")
-async def clear():
-    await cache_clear()
-    return {"status": "cache cleared"}
 
 @app.get("/proxy")
 async def proxy(url: str = Query(...), cookie: str = Query(default="")):

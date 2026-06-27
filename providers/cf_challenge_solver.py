@@ -290,20 +290,6 @@ def solve_challenge(
     return None, meta
 
 
-def get_cf_clearance(
-    url: str,
-    html: str,
-    ua: str,
-    fetch_fn=None,
-) -> str | None:
-    """
-    Get cf_clearance cookie for a URL facing a CF challenge.
-    Returns cookie string or None.
-    """
-    cookie, _ = solve_challenge(url, html, ua, fetch_fn)
-    return cookie
-
-
 # ---------- Integration helper ----------
 
 def should_skip_cf_solve(url: str) -> bool:

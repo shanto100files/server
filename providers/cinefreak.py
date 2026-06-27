@@ -5,36 +5,10 @@ from urllib.parse import quote as urlquote
 from bs4 import BeautifulSoup
 from client import async_cf_get
 from providers.gdflix import resolve_gdflix
-from providers.auto_resolver import resolve_any, is_direct_streamable
+from providers.auto_resolver import resolve_any
 
 CINEFREAK_DOMAINS = ["https://cinefreak.net", "https://cinefreak.nl", "https://cinefreak.site"]
 CINECLOUD_BASE = "https://new5.cinecloud.site"
-
-def _parse_episode_range(text: str) -> tuple[int, int]:
-    m = re.search(r'Episode\s*(\d+)\s*[-–]\s*(\d+)', text)
-    if m:
-        return (int(m.group(1)), int(m.group(2)))
-    m = re.search(r'Episode\s*(\d+)', text)
-    if m:
-        n = int(m.group(1))
-        return (n, n)
-    return (0, 0)
-
-def _get_card_episode_range(card) -> tuple[int, int]:
-    card_text = card.get_text(" ", strip=True)
-    start, end = _parse_episode_range(card_text)
-    if start > 0:
-        return (start, end)
-    e_el = card.select_one("span.episode-badge")
-    if e_el:
-        s, e = _parse_episode_range(e_el.get_text(strip=True))
-        if s > 0:
-            return (s, e)
-    for el in card.select("span, div, p"):
-        s, e = _parse_episode_range(el.get_text(strip=True))
-        if s > 0:
-            return (s, e)
-    return (0, 0)
 
 async def _get_domain() -> str:
     for domain in CINEFREAK_DOMAINS:
@@ -74,23 +48,6 @@ def _parse_filename_meta(filename: str) -> dict:
         meta["format"] = "mp4"
     return meta
 
-async def _fetch_cinecloud_meta(page_url: str) -> dict:
-    html = await _fetch(page_url, {"Referer": "https://new5.cinecloud.site", "Cookie": "xla=s4t"})
-    if not html:
-        return {}
-    soup = BeautifulSoup(html, "html.parser")
-    meta = {}
-    title_el = soup.select_one("h1.file-title, .card-header")
-    if title_el:
-        fname = title_el.get_text(strip=True)
-        meta = _parse_filename_meta(fname)
-    size_el = soup.select_one("td.text-right")
-    if size_el:
-        prev = size_el.find_previous_sibling("td")
-        if prev and "size" in prev.get_text(strip=True).lower():
-            meta["fileSize"] = size_el.get_text(strip=True)
-    return meta
-
 async def _extract_direct_links(html: str) -> list[str]:
     results = []
     soup = BeautifulSoup(html, "html.parser")
@@ -112,8 +69,11 @@ async def _extract_direct_links(html: str) -> list[str]:
     return results
 
 async def _resolve_cinecloud(page_url: str, _depth: int = 0) -> tuple[list[str], dict]:
-    if _depth > 4:
+    if _depth > 2:
         return [], {}
+    # Add small delay between retries to avoid rate limiting
+    if _depth > 0:
+        await asyncio.sleep(0.3 * _depth)
 
     html = await _fetch(page_url, {"Referer": "https://new5.cinecloud.site", "Cookie": "xla=s4t"})
     if not html or len(html) < 500:
@@ -220,7 +180,6 @@ async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, 
         if not results:
             return sources
     except:
-        soup = BeautifulSoup(search_html, "html.parser")
         return sources
 
     best = results[0]
@@ -240,6 +199,9 @@ async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, 
         return sources
 
     soup = BeautifulSoup(post_html, "html.parser")
+
+    # Collect all resolve tasks first, then run them in parallel
+    resolve_tasks = []
 
     if media_type == "tv":
         dl_div = soup.select_one("div.download-links-div")
@@ -264,26 +226,11 @@ async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, 
                                 decoded = base64.b64decode(m_id.group(1)).decode()
                                 decoded = re.sub(r'newgo\d+$', '', decoded)
                                 decoded = decoded.replace("/x/", "/f/")
-                                dl_links, cc_meta = await _resolve_cinecloud(decoded)
-                                for dl in dl_links:
-                                    s = {"url": dl, "quality": cc_meta.get("quality", quality), "provider": "CineFreak", "format": cc_meta.get("format", "mp4"), "episode_label": cc_meta.get("episode_label", ep_label)}
-                                    if cc_meta.get("season"): s["season"] = cc_meta["season"]
-                                    if ep_start > 0:
-                                        s["ep_start"] = ep_start
-                                        s["ep_end"] = ep_end if ep_end > 0 else ep_start
-                                    elif cc_meta.get("ep_start"):
-                                        s["ep_start"] = cc_meta["ep_start"]
-                                        s["ep_end"] = cc_meta.get("ep_end", cc_meta["ep_start"])
-                                    if cc_meta.get("fileSize"): s["fileSize"] = cc_meta["fileSize"]
-                                    if cc_meta.get("language"): s["language"] = cc_meta["language"]
-                                    if cc_meta.get("filename"): s["filename"] = cc_meta["filename"]
-                                    sources.append(s)
-                                if not dl_links:
-                                    sources.append({"url": decoded, "quality": quality, "provider": "CineFreak", "format": "mp4", "episode_label": ep_label})
+                                resolve_tasks.append((decoded, quality, ep_label, ep_start, ep_end))
                             except:
                                 pass
 
-        if not sources:
+        if not resolve_tasks:
             for link in soup.select("a[href*='generate.php'], a[href*='cinecloud'], a[href*='/x/'], a[href*='/f/']")[:10]:
                 href = link.get("href", "")
                 quality = _extract_quality(link.text)
@@ -295,37 +242,13 @@ async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, 
                             decoded = base64.b64decode(m_id.group(1)).decode()
                             decoded = re.sub(r'newgo\d+$', '', decoded)
                             decoded = decoded.replace("/x/", "/f/")
-                            dl_links, cc_meta = await _resolve_cinecloud(decoded)
-                            for dl in dl_links:
-                                s = {"url": dl, "quality": cc_meta.get("quality", quality), "provider": "CineFreak", "format": cc_meta.get("format", "mp4"), "episode_label": cc_meta.get("episode_label", "")}
-                                if cc_meta.get("season"): s["season"] = cc_meta["season"]
-                                if cc_meta.get("ep_start"):
-                                    s["ep_start"] = cc_meta["ep_start"]
-                                    s["ep_end"] = cc_meta.get("ep_end", cc_meta["ep_start"])
-                                if cc_meta.get("fileSize"): s["fileSize"] = cc_meta["fileSize"]
-                                if cc_meta.get("language"): s["language"] = cc_meta["language"]
-                                if cc_meta.get("filename"): s["filename"] = cc_meta["filename"]
-                                sources.append(s)
-                            if not dl_links:
-                                sources.append({"url": decoded, "quality": quality, "provider": "CineFreak", "format": "mp4"})
+                            resolve_tasks.append((decoded, quality, "", 0, 0))
                         except:
                             pass
                 elif "/f/" in href or "/x/" in href or "cinecloud" in href:
                     cinecloud_url = href if href.startswith("http") else f"{CINECLOUD_BASE}{href}"
                     cinecloud_url = cinecloud_url.replace("/x/", "/f/")
-                    dl_links, cc_meta = await _resolve_cinecloud(cinecloud_url)
-                    for dl in dl_links:
-                        s = {"url": dl, "quality": cc_meta.get("quality", quality), "provider": "CineFreak", "format": cc_meta.get("format", "mp4"), "episode_label": cc_meta.get("episode_label", "")}
-                        if cc_meta.get("season"): s["season"] = cc_meta["season"]
-                        if cc_meta.get("ep_start"):
-                            s["ep_start"] = cc_meta["ep_start"]
-                            s["ep_end"] = cc_meta.get("ep_end", cc_meta["ep_start"])
-                        if cc_meta.get("fileSize"): s["fileSize"] = cc_meta["fileSize"]
-                        if cc_meta.get("language"): s["language"] = cc_meta["language"]
-                        if cc_meta.get("filename"): s["filename"] = cc_meta["filename"]
-                        sources.append(s)
-                    if not dl_links:
-                        sources.append({"url": cinecloud_url, "quality": quality, "provider": "CineFreak", "format": "mp4"})
+                    resolve_tasks.append((cinecloud_url, quality, "", 0, 0))
     else:
         for link in soup.select("a[href*='generate.php'], a[href*='cinecloud'], a[href*='/x/'], a[href*='/f/'], a[href*='neodrive'], a[href*='hubcloud']")[:10]:
             href = link.get("href", "")
@@ -333,19 +256,7 @@ async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, 
             if "/f/" in href or "/x/" in href or "cinecloud" in href:
                 cinecloud_url = href if href.startswith("http") else f"{CINECLOUD_BASE}{href}"
                 cinecloud_url = cinecloud_url.replace("/x/", "/f/")
-                dl_links, cc_meta = await _resolve_cinecloud(cinecloud_url)
-                for dl in dl_links:
-                    s = {"url": dl, "quality": cc_meta.get("quality", quality), "provider": "CineFreak", "format": cc_meta.get("format", "mp4")}
-                    if cc_meta.get("season"): s["season"] = cc_meta["season"]
-                    if cc_meta.get("ep_start"):
-                        s["ep_start"] = cc_meta["ep_start"]
-                        s["ep_end"] = cc_meta.get("ep_end", cc_meta["ep_start"])
-                    if cc_meta.get("fileSize"): s["fileSize"] = cc_meta["fileSize"]
-                    if cc_meta.get("language"): s["language"] = cc_meta["language"]
-                    if cc_meta.get("filename"): s["filename"] = cc_meta["filename"]
-                    sources.append(s)
-                if not dl_links:
-                    sources.append({"url": cinecloud_url, "quality": quality, "provider": "CineFreak", "format": "mp4"})
+                resolve_tasks.append((cinecloud_url, quality, "", 0, 0))
             elif "generate.php" in href:
                 gen_url = href if href.startswith("http") else f"{domain}{href}"
                 m_id = re.search(r'id=([A-Za-z0-9+/=]+)', gen_url)
@@ -354,40 +265,54 @@ async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, 
                         decoded = base64.b64decode(m_id.group(1)).decode()
                         decoded = re.sub(r'newgo\d+$', '', decoded)
                         decoded = decoded.replace("/x/", "/f/")
-                        dl_links, cc_meta = await _resolve_cinecloud(decoded)
-                        for dl in dl_links:
-                            s = {"url": dl, "quality": cc_meta.get("quality", quality), "provider": "CineFreak", "format": cc_meta.get("format", "mp4")}
-                            if cc_meta.get("season"): s["season"] = cc_meta["season"]
-                            if cc_meta.get("ep_start"):
-                                s["ep_start"] = cc_meta["ep_start"]
-                                s["ep_end"] = cc_meta.get("ep_end", cc_meta["ep_start"])
-                            if cc_meta.get("fileSize"): s["fileSize"] = cc_meta["fileSize"]
-                            if cc_meta.get("language"): s["language"] = cc_meta["language"]
-                            if cc_meta.get("filename"): s["filename"] = cc_meta["filename"]
-                            sources.append(s)
-                        if not dl_links:
-                            sources.append({"url": decoded, "quality": quality, "provider": "CineFreak", "format": "mp4"})
+                        resolve_tasks.append((decoded, quality, "", 0, 0))
                     except:
                         pass
             else:
                 sources.append({"url": href, "quality": quality, "provider": "CineFreak"})
+
+    # Parallel resolve with concurrency limit
+    async def _resolve_one(task):
+        url, quality, ep_label, ep_start, ep_end = task
+        try:
+            dl_links, cc_meta = await _resolve_cinecloud(url)
+            result_sources = []
+            for dl in dl_links:
+                s = {"url": dl, "quality": cc_meta.get("quality", quality), "provider": "CineFreak", "format": cc_meta.get("format", "mp4"), "episode_label": cc_meta.get("episode_label", ep_label)}
+                if cc_meta.get("season"): s["season"] = cc_meta["season"]
+                if ep_start > 0:
+                    s["ep_start"] = ep_start
+                    s["ep_end"] = ep_end if ep_end > 0 else ep_start
+                elif cc_meta.get("ep_start"):
+                    s["ep_start"] = cc_meta["ep_start"]
+                    s["ep_end"] = cc_meta.get("ep_end", cc_meta["ep_start"])
+                if cc_meta.get("fileSize"): s["fileSize"] = cc_meta["fileSize"]
+                if cc_meta.get("language"): s["language"] = cc_meta["language"]
+                if cc_meta.get("filename"): s["filename"] = cc_meta["filename"]
+                result_sources.append(s)
+            # Also add intermediate link for indexing (if different from resolved)
+            if dl_links and url not in dl_links:
+                intermediate = {"url": url, "quality": quality, "provider": "CineFreak", "format": "mp4", "episode_label": ep_label, "_intermediate": True}
+                result_sources.append(intermediate)
+            if not dl_links:
+                result_sources.append({"url": url, "quality": quality, "provider": "CineFreak", "format": "mp4", "episode_label": ep_label})
+            return result_sources
+        except:
+            return [{"url": url, "quality": quality, "provider": "CineFreak", "format": "mp4"}]
+
+    if resolve_tasks:
+        # Limit to 8 concurrent resolutions to avoid overwhelming
+        sem = asyncio.Semaphore(8)
+        async def _limited_resolve(task):
+            async with sem:
+                return await _resolve_one(task)
+        results = await asyncio.gather(*[_limited_resolve(t) for t in resolve_tasks], return_exceptions=True)
+        for r in results:
+            if isinstance(r, list):
+                sources.extend(r)
 
     return sources
 
 def _extract_quality(text: str) -> str:
     m = re.search(r"(1080p|720p|480p|4K|2160p)", text, re.IGNORECASE)
     return m.group(1) if m else "HD"
-
-def _quality_from_url(url: str) -> str:
-    from urllib.parse import unquote
-    decoded = unquote(url)
-    m = re.search(r"(1080p|720p|480p|4K|2160p)", decoded, re.IGNORECASE)
-    return m.group(1) if m else None
-
-def _enhance_quality(sources: list[dict]) -> list[dict]:
-    for s in sources:
-        if s.get("quality") == "HD":
-            q = _quality_from_url(s["url"])
-            if q:
-                s["quality"] = q
-    return sources

@@ -77,25 +77,6 @@ def check_all_domains() -> dict:
     return results
 
 
-def get_working_domain(provider: str) -> str | None:
-    state = _load_state()
-    if provider in state:
-        for domain_result in state[provider]:
-            if domain_result.get("alive"):
-                return domain_result["domain"]
-
-    config = _load_config()
-    provider_config = config.get(provider, {})
-    domains = provider_config.get("domains", [])
-
-    for domain in domains:
-        result = check_domain(domain)
-        if result["alive"]:
-            return domain
-
-    return None
-
-
 def get_all_status() -> dict:
     state = _load_state()
     if not state:

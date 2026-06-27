@@ -5,9 +5,9 @@ RUN useradd -m -u 1000 user
 
 WORKDIR /app
 
-# Install WARP proxy dependencies + build tools
+# Install WARP proxy dependencies + build tools + Rust (for rnet)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libffi-dev curl gnupg2 iptables net-tools \
+    gcc libffi-dev curl gnupg2 iptables net-tools cargo rustc \
     && curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ bookworm main" > /etc/apt/sources.list.d/cloudflare-client.list \
     && apt-get update && apt-get install -y --no-install-recommends cloudflare-warp \
@@ -17,7 +17,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Register WARP (free tier, no account needed for basic use)
-# WARP needs root for WireGuard interface, so keep root user
 RUN mkdir -p /var/lib/cloudflare-warp && \
     warp-cli registration new 2>/dev/null || true && \
     warp-cli mode proxy 2>/dev/null || true && \
