@@ -26,7 +26,6 @@ from providers.domain_discovery import discover_deep
 from providers.domain_health import check_all_domains, get_all_status
 import providers.auto_resolver as auto_resolver
 from providers import anime as anime_provider
-from client import async_cf_get
 
 
 app = FastAPI(title="CinePix Server", version="3.1")
@@ -482,7 +481,7 @@ if(pf2)pf2.style.width=Math.round((m.done/m.total)*100)+'%';
 }else if(m.type==='done'){
 const elapsed=((Date.now()-startTime)/1000).toFixed(1);
 const meta3=document.querySelector('.panel-meta');
-if(meta3)meta3.textContent=`Season ${season} — ${total} sources in ${elapsed}s`;
+if(meta3)meta3.textContent=`Season ${season} ÔÇö ${total} sources in ${elapsed}s`;
 if(!total&&sourceList)sourceList.innerHTML='<div class="empty">No sources found for this season</div>';
 _evtSource.close();_evtSource=null;
 }
@@ -1586,230 +1585,18 @@ async def anime_episodes(url: str = Query(...)):
     data = await asyncio.get_event_loop().run_in_executor(executor, lambda: anime_provider.info(url))
     return {"episodes": data.get("episodes", []), "is_movie": data.get("is_movie", False), "sources": data.get("sources", [])}
 
-@app.get("/resolve/fastdl")
-async def resolve_fastdl(url: str, quality: str = "HD"):
-    """Server-side resolver: fastdlserver → gdflix → direct download links"""
-    import re, urllib.parse
-
-    cache_key = f"fastdl:{url}"
-    cached = mem_cache_get(cache_key)
-    if cached:
-        return {"sources": cached, "cached": True}
-
-    results = []
-
-    async def fetch(u, ref=None):
-        h = {}
-        if ref: h["Referer"] = ref
-        return await async_cf_get(u, headers=h, timeout=15)
-
-    # Step 1: fetch fastdlserver page
-    html = await fetch(url, url)
-    if not html:
-        return {"sources": [], "error": "Failed to fetch fastdlserver page"}
-
-    # Step 2: extract redirect to gdflix
-    gdflix_url = None
-    for pat in [
-        r'window\.location\s*=\s*["\']([^"\']+gdflix[^"\']*)["\']',
-        r'href=["\']([^"\']*gdflix[^"\']*)["\']',
-        r'"(https?://[^"]*gdflix[^"]*)"',
-        r"'(https?://[^']*gdflix[^']*)'",
-    ]:
-        m = re.search(pat, html, re.IGNORECASE)
-        if m:
-            gdflix_url = m.group(1).replace("&amp;", "&")
-            break
-
-    if not gdflix_url:
-        return {"sources": [], "error": "No gdflix URL found in fastdlserver page"}
-
-    # Step 3: fetch gdflix page
-    gdflix_html = await fetch(gdflix_url, gdflix_url)
-    if not gdflix_html:
-        return {"sources": [], "error": "Failed to fetch gdflix page"}
-
-    # Step 4: extract direct links from gdflix
-    direct_patterns = [
-        r'href=["\']([^"\']*(?:r2\.dev|pixeldrain\.com|googleusercontent\.com)[^"\']*)["\']',
-        r'"(https?://[^"]*(?:r2\.dev|pixeldrain\.com|video-downloads\.googleusercontent\.com)[^"]*)"',
-    ]
-    seen = set()
-    for pat in direct_patterns:
-        for m in re.finditer(pat, gdflix_html, re.IGNORECASE):
-            link = m.group(1).replace("&amp;", "&")
-            if link not in seen:
-                seen.add(link)
-                fmt = "mp4" if ".mp4" in link.lower() else "mkv"
-                results.append({"url": link, "quality": quality, "format": fmt})
-
-    # Step 5: try gdflix key-based POST for direct URL
-    key_match = re.search(r'"key"\s*[,:]\s*"([^"]+)"', gdflix_html)
-    if key_match and not results:
-        try:
-            from urllib.parse import urlparse
-            key = key_match.group(1)
-            host = urlparse(gdflix_url).hostname
-            from client import async_cf_post
-            import json as _json
-            post_data = f"action=direct&key={key}&action_token="
-            post_headers = {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "x-token": host,
-                "Referer": gdflix_url,
-            }
-            resp = await async_cf_post(gdflix_url, data=post_data, headers=post_headers)
-            if resp:
-                data = _json.loads(resp.text) if hasattr(resp, 'text') else {}
-                direct = data.get("url") or data.get("visit_url")
-                if direct:
-                    results.append({"url": direct, "quality": quality, "format": "mkv"})
-        except Exception:
-            pass
-
-    mem_cache_set(cache_key, results)
-    return {"sources": results, "gdflix_url": gdflix_url}
-
-@app.get("/test-cf")
-async def test_cloudscraper():
-    """Diagnostic: check if cloudscraper is installed and test CF bypass"""
-    from client import _HAS_CLOUDSCRAPER, _cloudscraper_get
-    result = {"cloudscraper_installed": _HAS_CLOUDSCRAPER}
-    if _HAS_CLOUDSCRAPER:
-        try:
-            page = _cloudscraper_get("https://httpbin.org/get", timeout=10)
-            result["test_status"] = "ok" if page and "headers" in page else "failed"
-        except Exception as e:
-            result["test_status"] = f"error: {str(e)[:100]}"
-    return result
-
-@app.get("/test-gdflix")
-async def test_gdflix(url: str):
-    """Diagnostic: test GDFlix resolution with cloudscraper"""
-    import sys, os
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "providers"))
-    from auto_resolver import _fetch_cf, _fetch_cffi, _extract_download_links
-    from curl_cffi import requests as cffi_requests
-
-    result = {"url": url}
-    # Try cf_get (has cloudscraper fallback)
-    html = _fetch_cf(url, timeout=15)
-    result["cf_get_length"] = len(html) if html else 0
-    if html:
-        links = _extract_download_links(html)
-        result["cf_get_links"] = links[:10]
-        result["cf_get_snippet"] = html[:500]
-
-    # Try cffi_requests directly (no cloudscraper)
-    final_url, cffi_html = _fetch_cffi(url, timeout=15)
-    result["cffi_length"] = len(cffi_html) if cffi_html else 0
-    result["cffi_final_url"] = final_url
-    result["cffi_snippet"] = (cffi_html or "")[:500]
-
-    # Also try cloudscraper directly
-    try:
-        from client import _HAS_CLOUDSCRAPER, _scraper, _UA
-        if _HAS_CLOUDSCRAPER and _scraper:
-            r = _scraper.get(url, headers={"User-Agent": _UA}, timeout=15)
-            result["cs_status"] = r.status_code
-            result["cs_length"] = len(r.text)
-            result["cs_full"] = r.text[:5000]
-    except Exception as e:
-        result["cs_error"] = str(e)[:200]
-
-    return result
-
-@app.get("/resolve")
-async def resolve_link(url: str, quality: str = "HD"):
-    """Universal resolver: any intermediate link → direct streamable link"""
-    cache_key = f"resolve:{url}"
-    cached = mem_cache_get(cache_key)
-    if cached:
-        return {"sources": cached, "cached": True}
-
-    loop = asyncio.get_event_loop()
-    try:
-        results = await loop.run_in_executor(
-            executor,
-            lambda: auto_resolver.resolve_any(url, quality=quality)
-        )
-    except Exception as e:
-        return {"sources": [], "error": str(e)}
-
-    mem_cache_set(cache_key, results)
-    return {"sources": results, "count": len(results)}
-
-@app.get("/proxy")
-async def proxy_url(url: str, referer: str = None):
-    cached = mem_cache_get(url)
-    if cached:
-        return HTMLResponse(content=cached)
-
-    inflight_event = get_inflight(url)
-    if inflight_event:
-        await asyncio.to_thread(inflight_event.wait, 15)
-        cached = mem_cache_get(url)
-        if cached:
-            return HTMLResponse(content=cached)
-
-    event = threading.Event()
-    set_inflight(url, event)
-    try:
-        headers = {}
-        if referer:
-            headers["Referer"] = referer
-
-        html = None
-
-        # Strategy 1: curl_cffi (Chrome impersonation)
-        try:
-            html = await async_cf_get(url, headers=headers, timeout=15)
-        except Exception:
-            pass
-
-        # Strategy 2: httpx fallback
-        if not html:
-            try:
-                import httpx
-                h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"}
-                h.update(headers)
-                async with httpx.AsyncClient(follow_redirects=True, timeout=15, http2=True) as client:
-                    r = await client.get(url, headers=h)
-                    if r.status_code == 200:
-                        html = r.text
-            except Exception:
-                pass
-
-        # Strategy 3: corsproxy.io as last resort
-        if not html:
-            try:
-                import httpx, urllib.parse
-                proxy_url_fallback = f"https://corsproxy.io/?url={urllib.parse.quote(url)}"
-                async with httpx.AsyncClient(follow_redirects=True, timeout=12) as client:
-                    r = await client.get(proxy_url_fallback)
-                    if r.status_code == 200:
-                        html = r.text
-            except Exception:
-                pass
-
-        if not html:
-            raise HTTPException(status_code=404, detail="Failed to fetch URL from all strategies")
-
-        mem_cache_set(url, html)
-        return HTMLResponse(content=html)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        event.set()
-        remove_inflight(url)
-
 if __name__ == "__main__":
     import uvicorn
+
     print("=" * 50)
-    print("  CinePix Server v3.3")
-    print("  /proxy endpoint: Cloudflare bypass with cache+dedup")
+    print("  CinePix Server v3.3 (SMART OVERLOAD)")
+    print("  Performance: SMART MODE + TIMEOUTS")
+    print("  Workers: 30 threads, Semaphore: 15")
+    print("  Connections: 30 concurrent, HTTP/2")
+    print("  Provider Timeout: 20s, Overload: 3 fast-only")
+    print("  Memory Cache: 1000 entries (10min TTL, OrderedDict LRU)")
+    print("  Rate Limit: 60 req/min per IP")
+    print("  Providers: HDHub4U, 4KHDHub, CineFreak, MLSBD, SouthFreak, BollyFlix, VegaMovies")
+    print("  Anime: animedubhindi.cc + HubCloud/GDFlix resolvers")
     print("=" * 50)
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("server:app", host="0.0.0.0", port=port, log_level="warning")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
