@@ -719,65 +719,83 @@ async def health():
 async def debug_vegamovies(q: str = "RRR"):
     import re
     from bs4 import BeautifulSoup
-    from providers.vegamovies import _get_domain
-    from client import async_cf_get, async_cf_post
-    from urllib.parse import quote_plus
+    from providers.vegamovies import _get_domain, _dle_search, _fetch, _resolve_vcloud
+    from client import async_cf_get
+    from urllib.parse import unquote
     domain = await _get_domain()
     result = {"domain": domain}
+    
+    search_result = await _dle_search(domain, q, timeout=12)
+    if not search_result:
+        result["search"] = "NO_RESULTS"
+        return result
+    
+    st = search_result["type"]
+    sd = search_result["data"]
+    bd = search_result["domain"]
+    result["search_type"] = st
+    
+    if st == "typesense":
+        hits = sd.get("hits", [])
+        result["hits"] = len(hits)
+        if hits:
+            doc = hits[0].get("document", {})
+            result["first_title"] = doc.get("post_title", "")
+            result["first_url"] = doc.get("permalink", "")
+        return result
+    
+    soup = BeautifulSoup(sd, "html.parser")
     qw = set(q.lower().split())
+    post_url = None
+    post_title_found = None
     
-    def _check(html, label):
-        if not html or len(html) < 1000:
-            return {label: "EMPTY/SHORT"}
-        soup = BeautifulSoup(html, "html.parser")
-        articles = soup.find_all("article", class_=re.compile(r"post-item", re.I))
-        matches = []
-        for art in articles:
-            a = art.find("a", href=True)
-            if not a:
-                continue
-            t = a.get("title", "") or a.get("img", {}).get("alt", "") if a.find("img") else ""
-            if not t:
-                h3 = art.find("h3")
-                t = h3.get_text(strip=True) if h3 else ""
-            if t and qw & set(t.lower().split()):
-                matches.append(t[:80])
-        return {
-            "label": label,
-            "status": "ok" if "challenge" not in html.lower() and "just a moment" not in html.lower() else "CF_BLOCKED",
-            "length": len(html),
-            "articles_total": len(articles),
-            "articles_with_query": matches,
-            "snippet": html[:200]
-        }
+    for article in soup.find_all("article", class_=re.compile(r"post-item", re.I)):
+        a_tag = article.find("a", href=True)
+        if not a_tag:
+            continue
+        href = a_tag["href"]
+        pt = a_tag.get("title", "") or a_tag.get_text(strip=True)
+        if not pt:
+            h3 = article.find("h3")
+            if h3:
+                pt = h3.get_text(strip=True)
+        if not pt:
+            img = a_tag.find("img")
+            if img:
+                pt = img.get("alt", "")
+        tw = set(pt.lower().split())
+        overlap = qw & tw
+        if overlap:
+            post_url = href
+            post_title_found = pt
+            break
     
-    # Test Typesense
-    ts_url = f"{domain}/search.php?q={quote_plus(q)}&page=1"
-    ts_html = await async_cf_get(ts_url, timeout=10)
-    ts_result = {}
-    if ts_html:
-        try:
-            ts_data = json.loads(ts_html)
-            hits = ts_data.get("hits", [])
-            ts_result = {"status": "json", "hits": len(hits), "titles": [h.get("document", {}).get("post_title", "")[:60] for h in hits[:5]]}
-        except:
-            ts_result = {"status": "not_json", "length": len(ts_html), "snippet": ts_html[:150]}
-    else:
-        ts_result = {"status": "empty"}
-    result["typesense"] = ts_result
+    result["post_url"] = post_url[:100] if post_url else None
+    result["post_title"] = post_title_found[:100] if post_title_found else None
     
-    # Test POST search
-    body = f"do=search&subaction=search&story={quote_plus(q)}"
-    post_resp = await async_cf_post(domain + "/", data=body, headers={
-        "Referer": domain + "/",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }, timeout=10)
-    post_text = post_resp.text if hasattr(post_resp, 'text') else (post_resp or "")
-    result["post_search"] = _check(post_text, "POST")
+    if not post_url:
+        return result
     
-    # Test GET search
-    get_html = await async_cf_get(f"{domain}/?do=search&subaction=search&story={quote_plus(q)}", timeout=10)
-    result["get_search"] = _check(get_html, "GET")
+    post_html = await _fetch(post_url, timeout=12)
+    if not post_html:
+        result["post_fetch"] = "EMPTY"
+        return result
+    
+    result["post_length"] = len(post_html)
+    psoup = BeautifulSoup(post_html, "html.parser")
+    
+    fast_links = []
+    protector_links = []
+    for a in psoup.find_all("a", href=True):
+        h = a["href"]
+        t = a.get_text(strip=True)
+        if "fast-dl.one" in h:
+            fast_links.append({"url": h[:100], "text": t[:50]})
+        elif any(x in h for x in ["nexdrive", "vgmlinks", "hubcloud", "vcloud"]):
+            protector_links.append({"url": h[:100], "text": t[:50]})
+    
+    result["fast_dl_links"] = fast_links[:5]
+    result["protector_links"] = protector_links[:5]
     
     return result
 
