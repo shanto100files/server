@@ -17,6 +17,29 @@ async def _fetch(url, timeout=12):
 async def _dle_search(domain, query, timeout=12):
     """VegaMovies search — handle both Typesense (WordPress) and DLE CMS sites"""
     from urllib.parse import quote_plus
+    qw = set(query.lower().split())
+    
+    def _has_query_in_html(html, qw):
+        soup = BeautifulSoup(html, "html.parser")
+        for article in soup.find_all("article", class_=re.compile(r"post-item", re.I)):
+            a_tag = article.find("a", href=True)
+            if not a_tag:
+                continue
+            title = a_tag.get("title", "") or a_tag.get_text(strip=True)
+            if not title:
+                h3 = article.find("h3")
+                if h3:
+                    title = h3.get_text(strip=True)
+            if not title:
+                img = a_tag.find("img")
+                if img:
+                    title = img.get("alt", "")
+            if title:
+                tw = set(title.lower().split())
+                if qw & tw:
+                    return True
+        return False
+
     # Try Typesense JSON API first (vegamovies.navy / WordPress sites)
     html = await async_cf_get(f"{domain}/search.php?q={quote_plus(query)}&page=1", timeout=timeout)
     if html:
@@ -27,15 +50,8 @@ async def _dle_search(domain, query, timeout=12):
                 return {"type": "typesense", "data": data, "domain": domain}
         except (json.JSONDecodeError, KeyError):
             pass
-    # Try DLE CMS GET search (vegamovies4u.co.in sites)
-    html2 = await async_cf_get(f"{domain}/?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
-    if html2 and ("post-item" in html2 or "entry-title" in html2):
-        return {"type": "dle", "data": html2, "domain": domain}
-    # Try DLE CMS GET search via index.php
-    html3 = await async_cf_get(f"{domain}/index.php?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
-    if html3 and ("post-item" in html3 or "entry-title" in html3):
-        return {"type": "dle", "data": html3, "domain": domain}
-    # Fallback: POST form submission
+    
+    # Try DLE CMS POST search first (most DLE sites require POST for search)
     body = f"do=search&subaction=search&story={quote_plus(query)}"
     resp = await async_cf_post(domain + "/", data=body, headers={
         "Referer": domain + "/",
@@ -43,8 +59,22 @@ async def _dle_search(domain, query, timeout=12):
     }, timeout=timeout)
     if resp:
         text = resp.text if hasattr(resp, 'text') else resp
-        if text and ("post-item" in text or "entry-title" in text):
-            return {"type": "dle", "data": text, "domain": domain}
+        if text and len(text) > 2000 and ("post-item" in text or "entry-title" in text):
+            if _has_query_in_html(text, qw):
+                return {"type": "dle", "data": text, "domain": domain}
+
+    # Try DLE CMS GET search
+    html2 = await async_cf_get(f"{domain}/?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
+    if html2 and ("post-item" in html2 or "entry-title" in html2):
+        if _has_query_in_html(html2, qw):
+            return {"type": "dle", "data": html2, "domain": domain}
+
+    # Try index.php GET
+    html3 = await async_cf_get(f"{domain}/index.php?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
+    if html3 and ("post-item" in html3 or "entry-title" in html3):
+        if _has_query_in_html(html3, qw):
+            return {"type": "dle", "data": html3, "domain": domain}
+    
     return None
 
 async def _get_domain():
@@ -158,7 +188,15 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
             if not a_tag:
                 continue
             href = a_tag["href"]
-            post_title = a_tag.get_text(strip=True) or a_tag.get("title", "")
+            post_title = a_tag.get("title", "") or a_tag.get_text(strip=True)
+            if not post_title:
+                h3 = article.find("h3")
+                if h3:
+                    post_title = h3.get_text(strip=True)
+            if not post_title:
+                img = a_tag.find("img")
+                if img:
+                    post_title = img.get("alt", "")
             if not href.startswith("http"):
                 href = base_domain + href
             pt_lower = post_title.lower()
@@ -180,7 +218,7 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
                 if not a_tag:
                     continue
                 href = a_tag["href"]
-                post_title = a_tag.get_text(strip=True) or a_tag.get("title", "")
+                post_title = a_tag.get("title", "") or a_tag.get_text(strip=True)
                 if not href.startswith("http"):
                     href = base_domain + href
                 pt_lower = post_title.lower()
@@ -199,7 +237,11 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
         if not post_url:
             for a_tag in soup.find_all("a", href=True):
                 href = a_tag["href"]
-                post_title = a_tag.get_text(strip=True) or a_tag.get("title", "")
+                post_title = a_tag.get("title", "") or a_tag.get_text(strip=True)
+                if not post_title:
+                    img = a_tag.find("img")
+                    if img:
+                        post_title = img.get("alt", "")
                 if not href.endswith(".html"):
                     continue
                 if not href.startswith("http"):
