@@ -4,7 +4,7 @@ from urllib.parse import unquote
 from bs4 import BeautifulSoup
 from client import async_cf_get, async_cf_post
 
-VEGAMOVIES_DOMAINS = ["https://vegamovies4u.co.in", "https://vegamovies.mq", "https://vegamovies.market", "https://vegamovies.tel", "https://vegamovie.sl"]
+VEGAMOVIES_DOMAINS = ["https://vegamovies4u.co.in", "https://vegamovies.navy", "https://vegamovies.mq", "https://vegamovies.market", "https://vegamovies.tel", "https://vegamovie.sl"]
 DYNAMIC_URLS = "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
 
 _DOMAIN_CACHE = {"url": None, "time": 0}
@@ -51,15 +51,21 @@ async def _get_domain():
     global _DOMAIN_CACHE
     if _DOMAIN_CACHE["url"] and (time.time() - _DOMAIN_CACHE["time"] < _DOMAIN_CACHE_TTL):
         return _DOMAIN_CACHE["url"]
-        
+    
+    # Dynamic URL may return vegamovies.navy (WordPress/Typesense, limited content)
+    # or vegamovies4u.co.in (DLE CMS, more content). Prefer DLE site.
     try:
         r = await async_cf_get(DYNAMIC_URLS, timeout=8)
         if r:
             data = json.loads(r)
-            domain = data.get("vegamovies", VEGAMOVIES_DOMAINS[0])
-            _DOMAIN_CACHE["url"] = domain
+            dynamic_domain = data.get("vegamovies", "")
+            # If dynamic gives us a DLE site, use it; otherwise use the DLE domain
+            if "4u" in dynamic_domain or "co.in" in dynamic_domain:
+                _DOMAIN_CACHE["url"] = dynamic_domain
+            else:
+                _DOMAIN_CACHE["url"] = VEGAMOVIES_DOMAINS[0]
             _DOMAIN_CACHE["time"] = time.time()
-            return domain
+            return _DOMAIN_CACHE["url"]
     except:
         pass
         
