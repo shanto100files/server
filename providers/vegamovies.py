@@ -8,6 +8,8 @@ DYNAMIC_URLS = "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/hea
 
 _DOMAIN_CACHE = {"url": None, "time": 0}
 _DOMAIN_CACHE_TTL = 3600
+_DLE_SEARCH_CACHE = {}
+_DLE_SEARCH_CACHE_TTL = 300  # 5 min cache for DLE search results
 
 
 async def _fetch(url, timeout=12):
@@ -177,6 +179,11 @@ async def _search_typesense(domain, title):
 
 async def _search_dle(domain, title, timeout=10):
     """Try DLE CMS search (POST then GET). Returns HTML string or None."""
+    cache_key = f"{domain}:{title}"
+    cached = _DLE_SEARCH_CACHE.get(cache_key)
+    if cached and (time.time() - cached["time"] < _DLE_SEARCH_CACHE_TTL):
+        return cached["html"]
+    
     body = f"do=search&subaction=search&story={quote_plus(title)}"
     resp = await async_cf_post(domain + "/", data=body, headers={
         "Referer": domain + "/",
@@ -185,9 +192,11 @@ async def _search_dle(domain, title, timeout=10):
     if resp:
         text = resp.text if hasattr(resp, 'text') else resp
         if text and len(text) > 2000 and ("post-item" in text or "entry-title" in text):
+            _DLE_SEARCH_CACHE[cache_key] = {"html": text, "time": time.time()}
             return text
     html = await async_cf_get(f"{domain}/?do=search&subaction=search&story={quote_plus(title)}", timeout=timeout)
     if html and len(html) > 2000 and ("post-item" in html or "entry-title" in html):
+        _DLE_SEARCH_CACHE[cache_key] = {"html": html, "time": time.time()}
         return html
     return None
 
@@ -237,6 +246,8 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
 
     # Strategy 3: DLE search on vegamovies4u.co.in
     if not post_url:
+        import asyncio, random
+        await asyncio.sleep(random.uniform(0.3, 1.0))
         dle_html = await _search_dle("https://vegamovies4u.co.in", title, timeout=12)
         if dle_html:
             post_url = _find_post_in_html(dle_html, qw, year, "https://vegamovies4u.co.in")
