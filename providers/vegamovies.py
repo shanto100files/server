@@ -2,9 +2,9 @@ import re, json, base64, time
 import asyncio
 from urllib.parse import unquote
 from bs4 import BeautifulSoup
-from client import async_cf_get
+from client import async_cf_get, async_cf_post
 
-VEGAMOVIES_DOMAINS = ["https://vegamovies.mq", "https://vegamovies.market", "https://vegamovies.tel", "https://vegamovie.sl"]
+VEGAMOVIES_DOMAINS = ["https://vegamovies4u.co.in", "https://vegamovies.mq", "https://vegamovies.market", "https://vegamovies.tel", "https://vegamovie.sl"]
 DYNAMIC_URLS = "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
 
 _DOMAIN_CACHE = {"url": None, "time": 0}
@@ -12,7 +12,18 @@ _DOMAIN_CACHE_TTL = 3600  # 1 hour
 
 
 async def _fetch(url, timeout=12):
-    return await async_cf_get(url, headers={"Referer": "https://vegamovies.mq"}, timeout=timeout)
+    return await async_cf_get(url, headers={"Referer": "https://vegamovies4u.co.in"}, timeout=timeout)
+
+async def _dle_search(domain, query, timeout=12):
+    """DLE CMS search via POST form submission"""
+    body = f"do=search&subaction=search&story={query}"
+    resp = await async_cf_post(domain + "/", data=body, headers={
+        "Referer": domain + "/",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }, timeout=timeout)
+    if not resp:
+        return None
+    return resp.text if hasattr(resp, 'text') else resp
 
 async def _get_domain():
     global _DOMAIN_CACHE
@@ -80,24 +91,23 @@ async def _resolve_vcloud(url):
 
 async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
     domain = await _get_domain()
-    html = await _fetch(f"{domain}/search.php?q={title}&page=1", timeout=10)
+    # DLE CMS search via POST
+    html = await _dle_search(domain, title, timeout=12)
     if not html:
         return []
-    try:
-        data = json.loads(html)
-    except:
-        return []
-    hits = data.get("hits", [])
-    if not hits:
-        return []
+    # Parse DLE search results HTML
+    soup = BeautifulSoup(html, "html.parser")
     post_url = None
     qw = set(title.lower().split())
-    for hit in hits:
-        doc = hit.get("document", {})
-        permalink = doc.get("permalink", "")
-        post_title = doc.get("post_title", "")
-        if not permalink:
+    # Find search result entries
+    for article in soup.find_all(["article", "div", "h2", "h3"], class_=re.compile(r"post|entry|item|result", re.I)):
+        a_tag = article.find("a", href=True)
+        if not a_tag:
             continue
+        href = a_tag["href"]
+        post_title = a_tag.get_text(strip=True)
+        if not href.startswith("http"):
+            href = domain + href
         pt_lower = post_title.lower()
         tw = set(pt_lower.split())
         overlap = qw & tw
@@ -108,8 +118,29 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
             continue
         if year and year not in post_title:
             continue
-        post_url = domain + permalink
+        post_url = href
         break
+    # Fallback: try any <a> with href ending in .html
+    if not post_url:
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag["href"]
+            post_title = a_tag.get_text(strip=True)
+            if not href.endswith(".html"):
+                continue
+            if not href.startswith("http"):
+                href = domain + href
+            pt_lower = post_title.lower()
+            tw = set(pt_lower.split())
+            overlap = qw & tw
+            if not overlap:
+                continue
+            precision = len(overlap) / len(qw) if qw else 0
+            if precision < 0.5:
+                continue
+            if year and year not in post_title:
+                continue
+            post_url = href
+            break
     if not post_url:
         return []
     post_html = await _fetch(post_url, timeout=12)
