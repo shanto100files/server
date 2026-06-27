@@ -39,20 +39,35 @@ async def _get_domain():
 async def _resolve_vcloud(url, retries=3):
     """Resolve vcloud/hubcloud protector pages to get actual download links."""
     import asyncio
+    from client import _get_sync_session, _cloudscraper_get
+    
+    def _sync_fetch(sync_url):
+        """Fetch using sync curl_cffi session (fresh per attempt) or cloudscraper."""
+        try:
+            s = _get_sync_session(sync_url)
+            r = s.get(sync_url, timeout=12, impersonate="chrome110")
+            if r.status_code == 200:
+                return r.text
+        except:
+            pass
+        # Fallback: cloudscraper
+        cs = _cloudscraper_get(sync_url, timeout=15)
+        if cs:
+            return cs
+        return None
     
     html = None
     for attempt in range(retries):
-        # Fetch WITHOUT Referer (vcloud.zip blocks wrong referers)
-        html = await async_cf_get(url, timeout=12)
+        html = await asyncio.to_thread(_sync_fetch, url)
         if html and len(html) > 1000:
             break
         if attempt < retries - 1:
             await asyncio.sleep(1.5 * (attempt + 1))
             try:
-                from client import _session_lock, _domain_async_sessions
+                from client import _session_lock, _domain_sync_sessions
                 from urllib.parse import urlparse
                 with _session_lock:
-                    _domain_async_sessions.pop(urlparse(url).netloc, None)
+                    _domain_sync_sessions.pop(urlparse(url).netloc, None)
             except:
                 pass
     
@@ -73,16 +88,16 @@ async def _resolve_vcloud(url, retries=3):
             if token_url.startswith("http"):
                 token_html = None
                 for attempt in range(retries):
-                    token_html = await async_cf_get(token_url, timeout=12)
+                    token_html = await asyncio.to_thread(_sync_fetch, token_url)
                     if token_html and len(token_html) > 500:
                         break
                     if attempt < retries - 1:
                         await asyncio.sleep(1.5 * (attempt + 1))
                         try:
-                            from client import _session_lock, _domain_async_sessions
+                            from client import _session_lock, _domain_sync_sessions
                             from urllib.parse import urlparse
                             with _session_lock:
-                                _domain_async_sessions.pop(urlparse(token_url).netloc, None)
+                                _domain_sync_sessions.pop(urlparse(token_url).netloc, None)
                         except:
                             pass
                 if token_html:

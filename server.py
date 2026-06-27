@@ -747,8 +747,16 @@ async def debug_vegamovies(q: str = "RRR"):
                             result["vcloud_url"] = vcloud_url[:100]
                             # Step-by-step vcloud debug
                             import base64 as b64mod
-                            from client import async_cf_get
-                            vhtml = await async_cf_get(vcloud_url, timeout=12)
+                            from client import _get_sync_session, _cloudscraper_get
+                            import asyncio as _aio
+                            def _sf(u):
+                                try:
+                                    s = _get_sync_session(u)
+                                    r = s.get(u, timeout=12, impersonate="chrome110")
+                                    if r.status_code == 200: return r.text
+                                except: pass
+                                return _cloudscraper_get(u, timeout=15)
+                            vhtml = await _aio.to_thread(_sf, vcloud_url)
                             result["vcloud_fetch_ok"] = bool(vhtml)
                             result["vcloud_fetch_len"] = len(vhtml) if vhtml else 0
                             if vhtml:
@@ -761,7 +769,7 @@ async def debug_vegamovies(q: str = "RRR"):
                                         once = b64mod.b64decode(bb).decode()
                                         twice = b64mod.b64decode(once).decode()
                                         result["vcloud_token_url"] = twice[:120]
-                                        token_html = await async_cf_get(twice, timeout=12)
+                                        token_html = await _aio.to_thread(_sf, twice)
                                         result["vcloud_token_ok"] = bool(token_html)
                                         result["vcloud_token_len"] = len(token_html) if token_html else 0
                                         if token_html:
