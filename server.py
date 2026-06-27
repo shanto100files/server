@@ -719,54 +719,66 @@ async def health():
 async def debug_vegamovies(q: str = "RRR"):
     import re
     from bs4 import BeautifulSoup
-    from providers.vegamovies import _dle_search, _get_domain
+    from providers.vegamovies import _get_domain
+    from client import async_cf_get, async_cf_post
+    from urllib.parse import quote_plus
     domain = await _get_domain()
     result = {"domain": domain}
-    search_result = await _dle_search(domain, q, timeout=15)
-    if not search_result:
-        result["search"] = "EMPTY"
-        return result
-    result["search_type"] = search_result.get("type", "unknown")
-    data = search_result.get("data", "")
-    if search_result["type"] == "typesense":
-        if isinstance(data, dict):
-            result["hits_count"] = len(data.get("hits", []))
-            result["hits_titles"] = [hit.get("document", {}).get("post_title", "") for hit in data.get("hits", [])[:5]]
-        return result
-    if isinstance(data, dict):
-        result["search"] = "dict unexpected"
-        return result
-    soup = BeautifulSoup(data, "html.parser")
-    result["total_a_tags"] = len(soup.find_all("a", href=True))
-    result["articles"] = len(soup.find_all("article"))
-    articles_post_item = soup.find_all("article", class_=re.compile(r"post-item", re.I))
-    result["articles_post_item"] = len(articles_post_item)
-    h3_entry = soup.find_all("h3", class_=re.compile(r"entry-title|post-title", re.I))
-    result["h3_entry_title"] = len(h3_entry)
-    if articles_post_item:
-        first = articles_post_item[0]
-        first_a = first.find("a", href=True)
-        if first_a:
-            result["first_article_href"] = first_a["href"][:100]
-            result["first_article_text"] = first_a.get_text(strip=True)[:80]
-            result["first_a_title"] = first_a.get("title", "")
-            img = first_a.find("img")
-            if img:
-                result["first_a_img_alt"] = img.get("alt", "")[:80]
-                result["first_a_img_src"] = img.get("src", "")[:80]
-            h3 = first.find("h3")
-            if h3:
-                result["first_article_h3"] = h3.get_text(strip=True)[:80]
-        result["first_article_html"] = str(first)[:500]
-    elif h3_entry:
-        first_a = h3_entry[0].find("a", href=True)
-        if first_a:
-            result["first_h3_href"] = first_a["href"][:100]
-            result["first_h3_text"] = first_a.get_text(strip=True)[:80]
+    qw = set(q.lower().split())
+    
+    def _check(html, label):
+        if not html or len(html) < 1000:
+            return {label: "EMPTY/SHORT"}
+        soup = BeautifulSoup(html, "html.parser")
+        articles = soup.find_all("article", class_=re.compile(r"post-item", re.I))
+        matches = []
+        for art in articles:
+            a = art.find("a", href=True)
+            if not a:
+                continue
+            t = a.get("title", "") or a.get("img", {}).get("alt", "") if a.find("img") else ""
+            if not t:
+                h3 = art.find("h3")
+                t = h3.get_text(strip=True) if h3 else ""
+            if t and qw & set(t.lower().split()):
+                matches.append(t[:80])
+        return {
+            "label": label,
+            "status": "ok" if "challenge" not in html.lower() and "just a moment" not in html.lower() else "CF_BLOCKED",
+            "length": len(html),
+            "articles_total": len(articles),
+            "articles_with_query": matches,
+            "snippet": html[:200]
+        }
+    
+    # Test Typesense
+    ts_url = f"{domain}/search.php?q={quote_plus(q)}&page=1"
+    ts_html = await async_cf_get(ts_url, timeout=10)
+    ts_result = {}
+    if ts_html:
+        try:
+            ts_data = json.loads(ts_html)
+            hits = ts_data.get("hits", [])
+            ts_result = {"status": "json", "hits": len(hits), "titles": [h.get("document", {}).get("post_title", "")[:60] for h in hits[:5]]}
+        except:
+            ts_result = {"status": "not_json", "length": len(ts_html), "snippet": ts_html[:150]}
     else:
-        a_tags = soup.find_all("a", href=True)[:10]
-        result["sample_a_texts"] = [a.get_text(strip=True)[:50] for a in a_tags if a.get_text(strip=True)]
-        result["sample_a_hrefs"] = [a["href"][:80] for a in a_tags if a.get_text(strip=True)]
+        ts_result = {"status": "empty"}
+    result["typesense"] = ts_result
+    
+    # Test POST search
+    body = f"do=search&subaction=search&story={quote_plus(q)}"
+    post_resp = await async_cf_post(domain + "/", data=body, headers={
+        "Referer": domain + "/",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }, timeout=10)
+    post_text = post_resp.text if hasattr(post_resp, 'text') else (post_resp or "")
+    result["post_search"] = _check(post_text, "POST")
+    
+    # Test GET search
+    get_html = await async_cf_get(f"{domain}/?do=search&subaction=search&story={quote_plus(q)}", timeout=10)
+    result["get_search"] = _check(get_html, "GET")
+    
     return result
 
 @app.get("/admin/link-cache")
