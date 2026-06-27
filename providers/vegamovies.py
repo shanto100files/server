@@ -10,6 +10,8 @@ _DOMAIN_CACHE = {"url": None, "time": 0}
 _DOMAIN_CACHE_TTL = 3600
 _DLE_SEARCH_CACHE = {}
 _DLE_SEARCH_CACHE_TTL = 300  # 5 min cache for DLE search results
+_TS_SEARCH_CACHE = {}
+_TS_SEARCH_CACHE_TTL = 600  # 10 min cache for Typesense results
 
 
 async def _fetch(url, timeout=12):
@@ -268,6 +270,10 @@ def _find_post_in_html(html, qw, year, base_domain):
 
 async def _search_typesense(domain, title):
     """Try Typesense JSON search on a domain. Returns list of (url, title) or empty."""
+    cache_key = f"{domain}:{title}"
+    cached = _TS_SEARCH_CACHE.get(cache_key)
+    if cached and (time.time() - cached["time"] < _TS_SEARCH_CACHE_TTL):
+        return cached["data"]
     try:
         html = await async_cf_get(f"{domain}/search.php?q={quote_plus(title)}&page=1", timeout=10)
         if not html:
@@ -282,6 +288,7 @@ async def _search_typesense(domain, title):
             if permalink and post_title:
                 url = permalink if permalink.startswith("http") else domain + permalink
                 results.append((url, post_title))
+        _TS_SEARCH_CACHE[cache_key] = {"data": results, "time": time.time()}
         return results
     except:
         return []
@@ -380,7 +387,7 @@ async def _vegamovies_inner(title, tmdb_id="", season=0, episode=0, year="", med
                 base_domain = domain
 
     if not post_url:
-        return [{"url": "", "quality": "debug", "provider": f"VM-no-post:{domain}", "format": "mp4"}]
+        return []
 
     # Fetch post page and extract download links
     post_html = await _fetch(post_url, timeout=12)
