@@ -331,6 +331,15 @@ def _match_title(title_text, qw, year):
 
 
 async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
+    import traceback
+    try:
+        return await _vegamovies_inner(title, tmdb_id, season, episode, year, media_type)
+    except Exception as e:
+        print(f"[VegaMovies] ERROR: {e}", flush=True)
+        traceback.print_exc()
+        return []
+
+async def _vegamovies_inner(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
     domain = await _get_domain()
     qw = set(title.lower().split())
     post_url = None
