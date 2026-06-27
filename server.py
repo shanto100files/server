@@ -718,18 +718,21 @@ async def health():
 @app.get("/admin/debug/vegamovies")
 async def debug_vegamovies(q: str = "RRR"):
     from providers.vegamovies import _dle_search, _get_domain
-    from client import async_cf_get
     domain = await _get_domain()
     result = {"domain": domain}
-    html = await _dle_search(domain, q, timeout=15)
-    if not html:
+    search_result = await _dle_search(domain, q, timeout=15)
+    if not search_result:
         result["search"] = "EMPTY"
     else:
-        result["search_length"] = len(html)
-        result["has_post_item"] = "post-item" in html
-        result["has_entry_title"] = "entry-title" in html
-        result["has_cf_challenge"] = "Just a moment" in html or "challenge-platform" in html
-        result["snippet"] = html[:500] if html else ""
+        result["search_type"] = search_result.get("type", "unknown")
+        data = search_result.get("data", "")
+        if isinstance(data, dict):
+            result["hits_count"] = len(data.get("hits", []))
+        else:
+            result["search_length"] = len(data)
+            result["has_post_item"] = "post-item" in data
+            result["has_entry_title"] = "entry-title" in data
+            result["has_cf_challenge"] = "Just a moment" in data
     return result
 
 @app.get("/admin/link-cache")
