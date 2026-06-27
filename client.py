@@ -25,11 +25,11 @@ except ImportError:
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 _httpx_client = httpx.Client(
-    timeout=httpx.Timeout(8.0),
+    timeout=httpx.Timeout(10.0),
     limits=httpx.Limits(
-        max_connections=30,
-        max_keepalive_connections=15,
-        keepalive_expiry=30,
+        max_connections=40,
+        max_keepalive_connections=20,
+        keepalive_expiry=45,
     ),
     follow_redirects=True,
     headers={"User-Agent": _UA},
@@ -60,6 +60,26 @@ def _fetch_free_proxies():
 
 _IMPERSONATES = ["chrome110", "chrome116", "chrome120", "edge101", "safari15_3"]
 
+# WARP proxy for CF-blocked domains (MLSBD etc.)
+_WARP_PROXY = os.environ.get("WARP_PROXY_URL", "")
+_PROXY_DOMAINS = {"mlsbd.co", "mlsbd.net", "mlsbd.com"}
+
+def _needs_proxy(url: str) -> bool:
+    """Check if a URL's domain needs WARP proxy."""
+    if not _WARP_PROXY:
+        return False
+    try:
+        host = urlparse(url).netloc.lower()
+        return any(d in host for d in _PROXY_DOMAINS)
+    except:
+        return False
+
+def _get_proxy_for_url(url: str) -> dict | None:
+    """Return proxy dict for domains that need WARP."""
+    if _needs_proxy(url):
+        return {"http": _WARP_PROXY, "https": _WARP_PROXY}
+    return None
+
 _domain_sync_sessions = {}
 _domain_async_sessions = {}
 _session_lock = threading.Lock()
@@ -72,7 +92,8 @@ def _get_sync_session(url: str):
     with _session_lock:
         if domain not in _domain_sync_sessions:
             imp = random.choice(_IMPERSONATES)
-            _domain_sync_sessions[domain] = cffi_requests.Session(impersonate=imp, proxies=_get_proxy())
+            proxy = _get_proxy_for_url(url)
+            _domain_sync_sessions[domain] = cffi_requests.Session(impersonate=imp, proxies=proxy)
         return _domain_sync_sessions[domain]
 
 def _get_async_session(url: str):
@@ -80,7 +101,8 @@ def _get_async_session(url: str):
     with _session_lock:
         if domain not in _domain_async_sessions:
             imp = random.choice(_IMPERSONATES)
-            _domain_async_sessions[domain] = cffi_requests.AsyncSession(impersonate=imp, proxies=_get_proxy())
+            proxy = _get_proxy_for_url(url)
+            _domain_async_sessions[domain] = cffi_requests.AsyncSession(impersonate=imp, proxies=proxy)
         return _domain_async_sessions[domain]
 
 def http_get(url: str, headers: dict = None, timeout: int = 10, retries: int = 2) -> httpx.Response | None:

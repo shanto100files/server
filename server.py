@@ -140,6 +140,28 @@ async def startup():
     threading.Thread(target=_run_domain_discovery, daemon=True).start()
     threading.Thread(target=_cleanup_link_cache, daemon=True).start()
     threading.Thread(target=_preload_sitemaps, daemon=True).start()
+    threading.Thread(target=_check_warp_proxy, daemon=True).start()
+
+def _check_warp_proxy():
+    """Check if Cloudflare WARP proxy is running for MLSBD CF bypass."""
+    import subprocess
+    try:
+        # Check if warp-cli is available
+        result = subprocess.run(["warp-cli", "status"], capture_output=True, text=True, timeout=5)
+        if "Connected" in result.stdout:
+            print("[WARP] Proxy active - MLSBD CF bypass enabled")
+            return True
+        else:
+            print(f"[WARP] Not connected: {result.stdout.strip()}")
+            # Try to connect
+            subprocess.run(["warp-cli", "connect"], capture_output=True, timeout=5)
+            return False
+    except FileNotFoundError:
+        print("[WARP] warp-cli not installed - MLSBD will use direct connection")
+        return False
+    except Exception as e:
+        print(f"[WARP] Check failed: {e}")
+        return False
 
 def _cleanup_link_cache():
     try:
