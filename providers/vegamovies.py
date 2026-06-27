@@ -148,6 +148,15 @@ async def _resolve_vcloud(url):
     return results
 
 async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
+    import traceback
+    try:
+        return await _vegamovies_inner(title, tmdb_id, season, episode, year, media_type)
+    except Exception as e:
+        print(f"[VegaMovies] ERROR: {e}")
+        traceback.print_exc()
+        return []
+
+async def _vegamovies_inner(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
     domain = await _get_domain()
     search_result = await _dle_search(domain, title, timeout=12)
     if not search_result:
