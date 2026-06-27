@@ -152,12 +152,15 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
     try:
         return await _vegamovies_inner(title, tmdb_id, season, episode, year, media_type)
     except Exception as e:
-        print(f"[VegaMovies] ERROR: {e}")
-        traceback.print_exc()
-        return []
+        tb = traceback.format_exc()
+        print(f"[VegaMovies] ERROR: {e}\n{tb}", flush=True)
+        return [{"url": "", "quality": "error", "provider": f"VegaMovies-err:{str(e)[:80]}", "format": "mp4"}]
 
 async def _vegamovies_inner(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
     domain = await _get_domain()
+    search_result = await _dle_search(domain, title, timeout=12)
+    if not search_result:
+        return [{"url": "", "quality": "debug", "provider": f"VM-no-search:{domain}", "format": "mp4"}]
     search_result = await _dle_search(domain, title, timeout=12)
     if not search_result:
         return []
