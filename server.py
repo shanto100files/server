@@ -717,76 +717,14 @@ async def health():
 
 @app.get("/admin/debug/vegamovies")
 async def debug_vegamovies(q: str = "RRR"):
-    import re, time as _time
-    from bs4 import BeautifulSoup
-    from providers.vegamovies import _search_typesense, _search_dle, _find_post_in_html, _fetch, _match_title, _resolve_vcloud, _parse_download_links
-    qw = set(q.lower().split())
+    from providers.vegamovies import vegamovies
     result = {}
-    
-    t0 = _time.time()
-    ts1 = await _search_typesense("https://vegamovies.navy", q)
-    result["typesense_navy"] = {"hits": len(ts1), "titles": [t[:60] for _, t in ts1[:5]]}
-    for url, post_title in ts1:
-        if _match_title(post_title, qw, ""):
-            result["typesense_match"] = {"url": url[:100], "title": post_title[:80]}
-            post_html = await _fetch(url, timeout=12)
-            if post_html:
-                result["post_length"] = len(post_html)
-                psoup = BeautifulSoup(post_html, "html.parser")
-                prot = [a["href"] for a in psoup.find_all("a", href=True) if any(x in a["href"] for x in ["vgmlinks", "nexdrive", "hubcloud", "vcloud"])]
-                result["protector_count"] = len(prot)
-                if prot:
-                    result["protector_url"] = prot[0][:100]
-                    ph2 = await _fetch(prot[0], timeout=10)
-                    if ph2:
-                        result["protector_len"] = len(ph2)
-                        vcloud_links = re.findall(r'href="(https?://vcloud\.zip/[^"]*)"', ph2)
-                        result["vcloud_in_protector"] = len(vcloud_links)
-                        if vcloud_links:
-                            vcloud_url = vcloud_links[0]
-                            result["vcloud_url"] = vcloud_url[:100]
-                            # Step-by-step vcloud debug
-                            import base64 as b64mod
-                            from client import _get_sync_session, _cloudscraper_get
-                            import asyncio as _aio
-                            def _sf(u):
-                                try:
-                                    s = _get_sync_session(u)
-                                    r = s.get(u, timeout=12, impersonate="chrome110")
-                                    if r.status_code == 200: return r.text
-                                except: pass
-                                return _cloudscraper_get(u, timeout=15)
-                            vhtml = await _aio.to_thread(_sf, vcloud_url)
-                            result["vcloud_fetch_ok"] = bool(vhtml)
-                            result["vcloud_fetch_len"] = len(vhtml) if vhtml else 0
-                            if vhtml:
-                                vm = re.search(r'atob\s*\(\s*atob\s*\(\s*["\']([^"\']+)["\']', vhtml)
-                                result["vcloud_atob_match"] = bool(vm)
-                                if vm:
-                                    bb = vm.group(1)
-                                    while len(bb) % 4 != 0: bb += "="
-                                    try:
-                                        once = b64mod.b64decode(bb).decode()
-                                        twice = b64mod.b64decode(once).decode()
-                                        result["vcloud_token_url"] = twice[:120]
-                                        token_html = await _aio.to_thread(_sf, twice)
-                                        result["vcloud_token_ok"] = bool(token_html)
-                                        result["vcloud_token_len"] = len(token_html) if token_html else 0
-                                        if token_html:
-                                            direct = _parse_download_links(token_html)
-                                            result["vcloud_token_links"] = len(direct)
-                                            result["vcloud_token_results"] = [{"url": r["url"][:80], "q": r.get("quality","?")} for r in direct[:3]]
-                                    except Exception as e:
-                                        result["vcloud_decode_error"] = str(e)
-                            # Also try _resolve_vcloud directly
-                            resolved = await _resolve_vcloud(vcloud_url)
-                            result["vcloud_resolved"] = len(resolved)
-                            result["vcloud_results"] = [{"url": r["url"][:80], "q": r.get("quality","?")} for r in resolved[:3]]
-                        # Also try direct link parse on protector page
-                        direct = _parse_download_links(ph2)
-                        result["protector_direct_links"] = len(direct)
-            break
-    result["typesense_time"] = round(_time.time() - t0, 2)
+    # Test full function
+    try:
+        sources = await vegamovies(q, "", 0, 0, "", "movie")
+        result["full_flow"] = {"count": len(sources), "sources": [{"url": s.get("url","")[:80], "q": s.get("quality",""), "p": s.get("provider","")} for s in sources[:5]]}
+    except Exception as e:
+        result["full_flow_error"] = str(e)
     return result
 
 @app.get("/admin/link-cache")
