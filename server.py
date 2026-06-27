@@ -717,28 +717,50 @@ async def health():
 
 @app.get("/admin/debug/vegamovies")
 async def debug_vegamovies(q: str = "RRR"):
-    import asyncio
-    from providers.vegamovies import _search_typesense, _search_dle, _find_post_in_html
-    from urllib.parse import quote_plus
-    result = {}
+    import re, time as _time
+    from bs4 import BeautifulSoup
+    from providers.vegamovies import _search_typesense, _search_dle, _find_post_in_html, _fetch, _match_title
     qw = set(q.lower().split())
+    result = {}
     
-    # Test Typesense on vegamovies.navy
+    t0 = _time.time()
     ts1 = await _search_typesense("https://vegamovies.navy", q)
-    result["typesense_navy"] = {"hits": len(ts1), "titles": [t for _, t in ts1[:5]]}
+    result["typesense_navy"] = {"hits": len(ts1), "titles": [t[:60] for _, t in ts1[:5]]}
+    for url, post_title in ts1:
+        if _match_title(post_title, qw, ""):
+            result["typesense_match"] = {"url": url[:100], "title": post_title[:80]}
+            post_html = await _fetch(url, timeout=12)
+            if post_html:
+                result["post_length"] = len(post_html)
+                fast = [a["href"] for a in BeautifulSoup(post_html, "html.parser").find_all("a", href=True) if "fast-dl.one" in a["href"]]
+                prot = [a["href"][:80] for a in BeautifulSoup(post_html, "html.parser").find_all("a", href=True) if any(x in a["href"] for x in ["vgmlinks", "nexdrive", "hubcloud", "vcloud"])]
+                result["fast_dl_count"] = len(fast)
+                result["protector_count"] = len(prot)
+                result["sample_hrefs"] = [a["href"][:80] for a in BeautifulSoup(post_html, "html.parser").find_all("a", href=True) if a["href"].startswith("http")][:10]
+            else:
+                result["post_fetch"] = "EMPTY"
+            break
+    result["typesense_time"] = round(_time.time() - t0, 2)
     
-    # Test Typesense on vegamovies4u.co.in
+    t1 = _time.time()
     ts2 = await _search_typesense("https://vegamovies4u.co.in", q)
-    result["typesense_4u"] = {"hits": len(ts2), "titles": [t for _, t in ts2[:5]]}
+    result["typesense_4u"] = {"hits": len(ts2)}
+    result["typesense_4u_time"] = round(_time.time() - t1, 2)
     
-    # Test DLE on vegamovies4u.co.in
+    t2 = _time.time()
     dle = await _search_dle("https://vegamovies4u.co.in", q, timeout=12)
     if dle:
-        result["dle_4u"] = {"length": len(dle), "has_post_item": "post-item" in dle}
         post_url = _find_post_in_html(dle, qw, "", "https://vegamovies4u.co.in")
-        result["dle_4u_post"] = post_url[:100] if post_url else None
+        result["dle_4u"] = {"length": len(dle), "post_url": post_url[:100] if post_url else None}
+        if post_url:
+            ph = await _fetch(post_url, timeout=12)
+            if ph:
+                result["dle_post_length"] = len(ph)
+                fast = [a["href"] for a in BeautifulSoup(ph, "html.parser").find_all("a", href=True) if "fast-dl.one" in a["href"]]
+                result["dle_fast_dl_count"] = len(fast)
     else:
         result["dle_4u"] = "EMPTY"
+    result["dle_time"] = round(_time.time() - t2, 2)
     
     return result
 
