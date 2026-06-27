@@ -42,7 +42,7 @@ app.add_middleware(
 )
 
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=30)
-_provider_semaphore = asyncio.Semaphore(3)
+_provider_semaphore = asyncio.Semaphore(15)
 _active_streams = 0
 _streams_lock = threading.Lock()
 
@@ -718,14 +718,11 @@ async def health():
 @app.get("/admin/debug/vegamovies")
 async def debug_vegamovies(q: str = "RRR"):
     from providers.vegamovies import vegamovies
-    result = {}
-    # Test full function
     try:
         sources = await vegamovies(q, "", 0, 0, "", "movie")
-        result["full_flow"] = {"count": len(sources), "sources": [{"url": s.get("url","")[:80], "q": s.get("quality",""), "p": s.get("provider","")} for s in sources[:5]]}
+        return {"count": len(sources), "sources": [{"url": s.get("url","")[:80], "quality": s.get("quality",""), "provider": s.get("provider","")} for s in sources[:10]]}
     except Exception as e:
-        result["full_flow_error"] = str(e)
-    return result
+        return {"error": str(e)}
 
 @app.get("/admin/link-cache")
 async def link_cache_stats():
@@ -1467,11 +1464,7 @@ async def sources(tmdb_id: str, type: str = "movie", title: str = "", season: in
         except Exception:
             return []
 
-    provider_futures = []
-    for i, (n, f, a) in enumerate(tasks):
-        if i > 0 and not enough.is_set():
-            await asyncio.sleep(0.4)
-        provider_futures.append(asyncio.ensure_future(run_provider(n, f, a)))
+    provider_futures = [asyncio.ensure_future(run_provider(n, f, a)) for n, f, a in tasks]
     await asyncio.gather(*provider_futures, return_exceptions=True)
 
     # Cancel any remaining tasks if early exit triggered
@@ -1621,9 +1614,7 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
                     return name, []
     
             future_map = {}
-            for i, (name, func, args) in enumerate(tasks):
-                if i > 0 and not enough:
-                    await asyncio.sleep(0.5)
+            for name, func, args in tasks:
                 fut = asyncio.ensure_future(run_one(name, func, args))
                 future_map[fut] = name
                 chunk = f"data: {_json.dumps({'type': 'provider_start', 'name': name})}\n\n"
