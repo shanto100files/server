@@ -49,11 +49,15 @@ async def init_db():
             """)
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS link_cache (
-                    url TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
+                    key TEXT PRIMARY KEY,
+                    links TEXT NOT NULL,
                     provider TEXT NOT NULL,
                     created_at REAL NOT NULL
                 )
+            """)
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_link_cache_provider
+                ON link_cache(provider)
             """)
             await db.commit()
         print("[Cache] SQLite fallback ready")

@@ -12,6 +12,10 @@ import inspect
 from collections import OrderedDict
 
 from cache import init_db, cache_get, cache_set, cache_stats, cache_clear
+from link_indexer import (
+    init_link_table, save_links, get_cached_sources,
+    index_provider_results, clear_expired as clear_expired_links,
+)
 from tmdb import search_tmdb, get_tv_season
 from client import close as close_clients
 from providers.cinefreak import cinefreak
@@ -132,7 +136,20 @@ def check_rate_limit(ip):
 @app.on_event("startup")
 async def startup():
     await init_db()
+    await init_link_table()
     threading.Thread(target=_run_domain_discovery, daemon=True).start()
+    threading.Thread(target=_cleanup_link_cache, daemon=True).start()
+
+def _cleanup_link_cache():
+    try:
+        import asyncio as _aio
+        loop = _aio.new_event_loop()
+        deleted = loop.run_until_complete(clear_expired_links())
+        if deleted:
+            print(f"[LinkIndex] Cleaned {deleted} expired entries")
+        loop.close()
+    except Exception as e:
+        print(f"[LinkIndex] Cleanup error: {e}")
 
 def _run_domain_discovery():
     try:
@@ -696,7 +713,12 @@ function getPoster(t){return'';}
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "server": "CinePix Termux", "version": "3.0"}
+    return {"status": "ok", "server": "CinePix Termux", "version": "3.1"}
+
+@app.get("/admin/link-cache")
+async def link_cache_stats():
+    from link_indexer import cache_stats as link_stats
+    return await link_stats()
 
 @app.get("/admin/domains")
 async def domain_status():
@@ -1336,6 +1358,14 @@ async def sources(tmdb_id: str, type: str = "movie", title: str = "", season: in
     PROVIDER_TIMEOUT = 20.0
     overload = _active_streams > 8
 
+    # Try cached intermediate links first
+    try:
+        cached_links = await get_cached_sources(int(tmdb_id), type, title, season, episode)
+        if cached_links:
+            all_sources.extend(cached_links)
+    except Exception:
+        pass
+
     if overload:
         tasks = [
             ("hdhub4u", hdhub4u, (title, tmdb_id)),
@@ -1386,6 +1416,15 @@ async def sources(tmdb_id: str, type: str = "movie", title: str = "", season: in
             collected_sources.extend(unique_new)
             if len(collected_sources) >= EARLY_EXIT_THRESHOLD:
                 enough.set()
+            # Index intermediate links from this provider
+            if result:
+                try:
+                    await index_provider_results(
+                        int(tmdb_id), type, title, season, episode,
+                        name, result
+                    )
+                except Exception:
+                    pass
             return unique_new
         except asyncio.TimeoutError:
             return []
@@ -1456,7 +1495,32 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
             seen_urls = set()
             count = 0
             chunks = []
-    
+
+            # === STEP 1: Try resolving cached intermediate links first ===
+            try:
+                cached_sources = await get_cached_sources(
+                    int(tmdb_id), type, title, season, episode
+                )
+                if cached_sources:
+                    cached_new = []
+                    for s in cached_sources:
+                        url = s.get("url", "").split("?")[0].rstrip("/")
+                        if url not in seen_urls:
+                            seen_urls.add(url)
+                            _enrich_source(s)
+                            cached_new.append(s)
+                            count += 1
+                    if cached_new:
+                        chunk = f"data: {_json.dumps({'type': 'provider_start', 'name': 'CachedLinks'})}\n\n"
+                        chunks.append(chunk)
+                        yield chunk
+                        chunk = f"data: {_json.dumps({'type': 'provider_done', 'name': 'CachedLinks', 'sources': cached_new, 'count': len(cached_new), 'done': 1, 'total': 1})}\n\n"
+                        chunks.append(chunk)
+                        yield chunk
+            except Exception:
+                pass
+
+            # === STEP 2: Run providers (skip if enough from cache) ===
             if overload:
                 tasks = [
                     ("HDHub4U", hdhub4u, (title, tmdb_id)),
@@ -1476,7 +1540,7 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
     
             total = len(tasks)
             provider_times = {}
-            enough = False
+            enough = count >= 10
     
             async def run_one(name, func, args):
                 nonlocal enough
@@ -1485,6 +1549,8 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
                 t0 = time.time()
                 try:
                     async with _provider_semaphore:
+                        if enough:
+                            return name, []
                         if inspect.iscoroutinefunction(func):
                             coro = func(*args)
                             try:
@@ -1496,6 +1562,17 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
                     duration = time.time() - t0
                     provider_times[name] = round(duration, 2)
                     record_provider(name, bool(result), duration)
+
+                    # Index intermediate links from this provider
+                    if result:
+                        try:
+                            await index_provider_results(
+                                int(tmdb_id), type, title, season, episode,
+                                name, result
+                            )
+                        except Exception:
+                            pass
+
                     return name, result or []
                 except Exception as e:
                     duration = time.time() - t0
