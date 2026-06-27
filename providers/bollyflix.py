@@ -98,6 +98,9 @@ async def _extract_links(html: str, post_url: str = "") -> list[dict]:
             preferred.append((href, quality))
             seen_q.add(quality)
 
+    INTERMEDIATE = ["fastdlserver", "techzed", "hubcloud", "hubdrive", "gdflix",
+                    "neodrive", "linksmod", "direct-dl.lol", "cinecloud", "drivebot"]
+
     for href, quality in preferred[:5]:
         if len(sources) >= 5:
             break
@@ -105,6 +108,15 @@ async def _extract_links(html: str, post_url: str = "") -> list[dict]:
             fx_resolved = await _resolve_fxlinks(href, quality)
             if fx_resolved:
                 sources.extend(fx_resolved)
+                continue
+        host_lower = (urlparse(href).hostname or "").lower()
+        if any(x in href for x in INTERMEDIATE) or any(x in host_lower for x in INTERMEDIATE):
+            loop = asyncio.get_event_loop()
+            resolved = await loop.run_in_executor(None, lambda h=href, q=quality: resolve_any(h, quality=q, referer=best.get("url", "")))
+            if resolved:
+                for r in resolved:
+                    r["provider"] = "BollyFlix"
+                sources.extend(resolved)
                 continue
         sources.append({
             "url": href,

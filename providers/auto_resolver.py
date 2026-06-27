@@ -377,16 +377,76 @@ def resolve_any(url: str, quality: str = "HD", referer: str = "") -> list[dict]:
             return results
 
     if "fastdlserver" in host:
+        results = []
+        seen = set()
         final_url, html = _fetch_cffi(url, timeout=12)
         if "gdflix" in final_url:
-            return resolve_gdflix_auto(final_url, quality=quality, referer=url)
+            g_resolved = resolve_gdflix_auto(final_url, quality=quality, referer=url)
+            for g in g_resolved:
+                if g["url"] not in seen:
+                    seen.add(g["url"])
+                    results.append(g)
+            if results:
+                return results
         if html:
-            links = _extract_download_links(html)
-            results = []
-            for link in links:
-                fmt = "mkv" if ".mkv" in link else "mp4"
-                results.append({"url": link, "quality": quality, "provider": "FastDL", "format": fmt})
-            return results
+            for link in _extract_download_links(html):
+                if link not in seen:
+                    seen.add(link)
+                    fmt = "mkv" if ".mkv" in link else "mp4"
+                    results.append({"url": link, "quality": quality, "provider": "FastDL", "format": fmt})
+            if results:
+                return results
+            if "gdflix" in html:
+                gdflix_links = re.findall(r'href="(https?://[^"]*gdflix[^"]*)"', html)
+                for gl in gdflix_links:
+                    g_resolved = resolve_gdflix_auto(gl, quality=quality, referer=url)
+                    for g in g_resolved:
+                        if g["url"] not in seen:
+                            seen.add(g["url"])
+                            results.append(g)
+                if results:
+                    return results
+            if "hubcloud" in html:
+                hubcloud_links = re.findall(r'href="(https?://[^"]*hubcloud[^"]*)"', html)
+                for hl in hubcloud_links:
+                    h_resolved = resolve_hubcloud_auto(hl, quality=quality)
+                    for h in h_resolved:
+                        if h["url"] not in seen:
+                            seen.add(h["url"])
+                            results.append(h)
+                if results:
+                    return results
+            if "drivebot" in html:
+                drivebot_links = re.findall(r'href="(https?://[^"]*drivebot[^"]*)"', html)
+                for dl in drivebot_links:
+                    final2, html2 = _fetch_cffi(dl, timeout=10)
+                    if html2:
+                        for link in _extract_download_links(html2):
+                            if link not in seen:
+                                seen.add(link)
+                                fmt = "mkv" if ".mkv" in link else "mp4"
+                                results.append({"url": link, "quality": quality, "provider": "DriveBot", "format": fmt})
+                if results:
+                    return results
+            if "cinecloud" in html:
+                cinecloud_links = re.findall(r'href="(https?://[^"]*cinecloud[^"]*)"', html)
+                for cl in cinecloud_links:
+                    c_resolved = resolve_any(cl, quality=quality, referer=url)
+                    for c in c_resolved:
+                        if c["url"] not in seen:
+                            seen.add(c["url"])
+                            results.append(c)
+                if results:
+                    return results
+            if "techzed" in html:
+                techzed_links = re.findall(r'href="(https?://[^"]*techzed[^"]*)"', html)
+                for tl in techzed_links:
+                    t_resolved = resolve_any(tl, quality=quality, referer=url)
+                    for t in t_resolved:
+                        if t["url"] not in seen:
+                            seen.add(t["url"])
+                            results.append(t)
+        return results
 
     if "linksmod" in host:
         final_url, html = _fetch_cffi(url, timeout=10)
@@ -480,33 +540,69 @@ def resolve_any(url: str, quality: str = "HD", referer: str = "") -> list[dict]:
                     results.append({"url": link, "quality": quality, "provider": "HubDrive", "format": fmt})
                 return results
 
-    if "fxlinks" in host or "fastdlserver.site" in host:
+    if "fxlinks" in host:
+        results = []
+        seen = set()
         final_url, html = _fetch_cffi(url, timeout=10)
         if html:
             if "gdflix" in html:
                 gdflix_links = re.findall(r'href="(https?://[^"]*gdflix[^"]*)"', html)
                 for gl in gdflix_links:
                     g_resolved = resolve_gdflix_auto(gl, quality=quality, referer=url)
-                    if g_resolved:
-                        return g_resolved
+                    for g in g_resolved:
+                        if g["url"] not in seen:
+                            seen.add(g["url"])
+                            results.append(g)
+                if results:
+                    return results
             if "hubcloud" in html:
                 hubcloud_links = re.findall(r'href="(https?://[^"]*hubcloud[^"]*)"', html)
                 for hl in hubcloud_links:
                     h_resolved = resolve_hubcloud_auto(hl, quality=quality, referer=url)
-                    if h_resolved:
-                        return h_resolved
+                    for h in h_resolved:
+                        if h["url"] not in seen:
+                            seen.add(h["url"])
+                            results.append(h)
+                if results:
+                    return results
             if "fastdlserver" in html:
                 fastdl_links = re.findall(r'href="(https?://[^"]*fastdlserver[^"]*)"', html)
                 for fl in fastdl_links:
                     f_resolved = resolve_any(fl, quality=quality, referer=url)
-                    if f_resolved:
-                        return f_resolved
-            links = _extract_download_links(html)
-            if links:
-                results = []
-                for link in links:
+                    for f in f_resolved:
+                        if f["url"] not in seen:
+                            seen.add(f["url"])
+                            results.append(f)
+                if results:
+                    return results
+            if "drivebot" in html:
+                drivebot_links = re.findall(r'href="(https?://[^"]*drivebot[^"]*)"', html)
+                for dl in drivebot_links:
+                    final2, html2 = _fetch_cffi(dl, timeout=10)
+                    if html2:
+                        for link in _extract_download_links(html2):
+                            if link not in seen:
+                                seen.add(link)
+                                fmt = "mkv" if ".mkv" in link else "mp4"
+                                results.append({"url": link, "quality": quality, "provider": "DriveBot", "format": fmt})
+                if results:
+                    return results
+            if "cinecloud" in html:
+                cinecloud_links = re.findall(r'href="(https?://[^"]*cinecloud[^"]*)"', html)
+                for cl in cinecloud_links:
+                    c_resolved = resolve_any(cl, quality=quality, referer=url)
+                    for c in c_resolved:
+                        if c["url"] not in seen:
+                            seen.add(c["url"])
+                            results.append(c)
+                if results:
+                    return results
+            for link in _extract_download_links(html):
+                if link not in seen:
+                    seen.add(link)
                     fmt = "mkv" if ".mkv" in link else "mp4"
                     results.append({"url": link, "quality": quality, "provider": "FXLinks", "format": fmt})
+            if results:
                 return results
 
     if "direct-dl.lol" in host:
@@ -521,6 +617,72 @@ def resolve_any(url: str, quality: str = "HD", referer: str = "") -> list[dict]:
         for link in video_links:
             fmt = "mkv" if ".mkv" in link else "mp4"
             results.append({"url": link, "quality": quality, "provider": "DirectDL", "format": fmt})
+        return results
+
+    if "cinecloud" in host:
+        results = []
+        seen = set()
+        final_url, html = _fetch_cffi(url, timeout=12)
+        if html:
+            for link in _extract_download_links(html):
+                if link not in seen:
+                    seen.add(link)
+                    fmt = "mkv" if ".mkv" in link else "mp4"
+                    results.append({"url": link, "quality": quality, "provider": "CineCloud", "format": fmt})
+            if results:
+                return results
+            if "gdflix" in html:
+                gdflix_links = re.findall(r'href="(https?://[^"]*gdflix[^"]*)"', html)
+                for gl in gdflix_links:
+                    g_resolved = resolve_gdflix_auto(gl, quality=quality, referer=url)
+                    for g in g_resolved:
+                        if g["url"] not in seen:
+                            seen.add(g["url"])
+                            results.append(g)
+                if results:
+                    return results
+            if "hubcloud" in html:
+                hubcloud_links = re.findall(r'href="(https?://[^"]*hubcloud[^"]*)"', html)
+                for hl in hubcloud_links:
+                    h_resolved = resolve_hubcloud_auto(hl, quality=quality)
+                    for h in h_resolved:
+                        if h["url"] not in seen:
+                            seen.add(h["url"])
+                            results.append(h)
+                if results:
+                    return results
+            if "fastdlserver" in html:
+                fastdl_links = re.findall(r'href="(https?://[^"]*fastdlserver[^"]*)"', html)
+                for fl in fastdl_links:
+                    f_resolved = resolve_any(fl, quality=quality, referer=url)
+                    for f in f_resolved:
+                        if f["url"] not in seen:
+                            seen.add(f["url"])
+                            results.append(f)
+                if results:
+                    return results
+            if "drivebot" in html:
+                drivebot_links = re.findall(r'href="(https?://[^"]*drivebot[^"]*)"', html)
+                for dl in drivebot_links:
+                    final2, html2 = _fetch_cffi(dl, timeout=10)
+                    if html2:
+                        for link in _extract_download_links(html2):
+                            if link not in seen:
+                                seen.add(link)
+                                fmt = "mkv" if ".mkv" in link else "mp4"
+                                results.append({"url": link, "quality": quality, "provider": "DriveBot", "format": fmt})
+                if results:
+                    return results
+            sub_links = re.findall(r'href="(https?://[^"]*(?:new5\.cinecloud|/f/)[^"]*)"', html)
+            for sl in sub_links:
+                if sl != url and "cinecloud" in sl:
+                    sub_resolved = resolve_any(sl, quality=quality, referer=url)
+                    for sr in sub_resolved:
+                        if sr["url"] not in seen:
+                            seen.add(sr["url"])
+                            results.append(sr)
+            if results:
+                return results
         return results
 
     if "gdxshare" in host:
