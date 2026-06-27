@@ -420,6 +420,43 @@ def resolve_any(url: str, quality: str = "HD", referer: str = "") -> list[dict]:
                     results.append({"url": link, "quality": quality, "provider": "LinksMod", "format": fmt})
                 return results
 
+    if "techzed" in host:
+        final_url, html = _fetch_cffi(url, timeout=10)
+        if html:
+            if "gdflix" in html:
+                gdflix_links = re.findall(r'href="(https?://[^"]*gdflix[^"]*)"', html)
+                for gl in gdflix_links:
+                    g_resolved = resolve_gdflix_auto(gl, quality=quality, referer=url)
+                    if g_resolved:
+                        return g_resolved
+            if "hubcloud" in html:
+                hubcloud_links = re.findall(r'href="(https?://[^"]*hubcloud[^"]*)"', html)
+                for hl in hubcloud_links:
+                    h_resolved = resolve_hubcloud_auto(hl, quality=quality, referer=url)
+                    if h_resolved:
+                        return h_resolved
+            if "drivebot" in html:
+                drivebot_links = re.findall(r'href="(https?://[^"]*drivebot[^"]*)"', html)
+                for dl in drivebot_links:
+                    final2, html2 = _fetch_cffi(dl, timeout=12)
+                    if html2:
+                        links2 = _extract_download_links(html2)
+                        if links2:
+                            return [{"url": l, "quality": quality, "provider": "DriveBot", "format": "mkv" if ".mkv" in l else "mp4"} for l in links2]
+            if "fastdlserver" in html:
+                fastdl_links = re.findall(r'href="(https?://[^"]*fastdlserver[^"]*)"', html)
+                for fl in fastdl_links:
+                    f_resolved = resolve_any(fl, quality=quality, referer=url)
+                    if f_resolved:
+                        return f_resolved
+            links = _extract_download_links(html)
+            if links:
+                results = []
+                for link in links:
+                    fmt = "mkv" if ".mkv" in link else "mp4"
+                    results.append({"url": link, "quality": quality, "provider": "TechZed", "format": fmt})
+                return results
+
     if "hubdrive" in host:
         final_url, html = _fetch_cffi(url, timeout=10)
         if "hubcloud" in html:
@@ -441,6 +478,35 @@ def resolve_any(url: str, quality: str = "HD", referer: str = "") -> list[dict]:
                 for link in links:
                     fmt = "mkv" if ".mkv" in link else "mp4"
                     results.append({"url": link, "quality": quality, "provider": "HubDrive", "format": fmt})
+                return results
+
+    if "fxlinks" in host or "fastdlserver.site" in host:
+        final_url, html = _fetch_cffi(url, timeout=10)
+        if html:
+            if "gdflix" in html:
+                gdflix_links = re.findall(r'href="(https?://[^"]*gdflix[^"]*)"', html)
+                for gl in gdflix_links:
+                    g_resolved = resolve_gdflix_auto(gl, quality=quality, referer=url)
+                    if g_resolved:
+                        return g_resolved
+            if "hubcloud" in html:
+                hubcloud_links = re.findall(r'href="(https?://[^"]*hubcloud[^"]*)"', html)
+                for hl in hubcloud_links:
+                    h_resolved = resolve_hubcloud_auto(hl, quality=quality, referer=url)
+                    if h_resolved:
+                        return h_resolved
+            if "fastdlserver" in html:
+                fastdl_links = re.findall(r'href="(https?://[^"]*fastdlserver[^"]*)"', html)
+                for fl in fastdl_links:
+                    f_resolved = resolve_any(fl, quality=quality, referer=url)
+                    if f_resolved:
+                        return f_resolved
+            links = _extract_download_links(html)
+            if links:
+                results = []
+                for link in links:
+                    fmt = "mkv" if ".mkv" in link else "mp4"
+                    results.append({"url": link, "quality": quality, "provider": "FXLinks", "format": fmt})
                 return results
 
     if "direct-dl.lol" in host:
