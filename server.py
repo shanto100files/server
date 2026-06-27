@@ -745,6 +745,31 @@ async def debug_vegamovies(q: str = "RRR"):
                         if vcloud_links:
                             vcloud_url = vcloud_links[0]
                             result["vcloud_url"] = vcloud_url[:100]
+                            # Step-by-step vcloud debug
+                            import base64 as b64mod
+                            vhtml = await _fetch(vcloud_url, timeout=12)
+                            result["vcloud_fetch_ok"] = bool(vhtml)
+                            result["vcloud_fetch_len"] = len(vhtml) if vhtml else 0
+                            if vhtml:
+                                vm = re.search(r'atob\s*\(\s*atob\s*\(\s*["\']([^"\']+)["\']', vhtml)
+                                result["vcloud_atob_match"] = bool(vm)
+                                if vm:
+                                    bb = vm.group(1)
+                                    while len(bb) % 4 != 0: bb += "="
+                                    try:
+                                        once = b64mod.b64decode(bb).decode()
+                                        twice = b64mod.b64decode(once).decode()
+                                        result["vcloud_token_url"] = twice[:120]
+                                        token_html = await _fetch(twice, timeout=12)
+                                        result["vcloud_token_ok"] = bool(token_html)
+                                        result["vcloud_token_len"] = len(token_html) if token_html else 0
+                                        if token_html:
+                                            direct = _parse_download_links(token_html)
+                                            result["vcloud_token_links"] = len(direct)
+                                            result["vcloud_token_results"] = [{"url": r["url"][:80], "q": r.get("quality","?")} for r in direct[:3]]
+                                    except Exception as e:
+                                        result["vcloud_decode_error"] = str(e)
+                            # Also try _resolve_vcloud directly
                             resolved = await _resolve_vcloud(vcloud_url)
                             result["vcloud_resolved"] = len(resolved)
                             result["vcloud_results"] = [{"url": r["url"][:80], "q": r.get("quality","?")} for r in resolved[:3]]
