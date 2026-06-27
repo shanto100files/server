@@ -42,7 +42,7 @@ app.add_middleware(
 )
 
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=30)
-_provider_semaphore = asyncio.Semaphore(15)
+_provider_semaphore = asyncio.Semaphore(3)
 _active_streams = 0
 _streams_lock = threading.Lock()
 
@@ -1467,7 +1467,11 @@ async def sources(tmdb_id: str, type: str = "movie", title: str = "", season: in
         except Exception:
             return []
 
-    provider_futures = [asyncio.ensure_future(run_provider(n, f, a)) for n, f, a in tasks]
+    provider_futures = []
+    for i, (n, f, a) in enumerate(tasks):
+        if i > 0 and not enough.is_set():
+            await asyncio.sleep(0.4)
+        provider_futures.append(asyncio.ensure_future(run_provider(n, f, a)))
     await asyncio.gather(*provider_futures, return_exceptions=True)
 
     # Cancel any remaining tasks if early exit triggered
