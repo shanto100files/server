@@ -380,7 +380,7 @@ async def _vegamovies_inner(title, tmdb_id="", season=0, episode=0, year="", med
                 base_domain = domain
 
     if not post_url:
-        return []
+        return [{"url": "", "quality": "debug", "provider": f"VM-no-post:{domain}", "format": "mp4"}]
 
     # Fetch post page and extract download links
     post_html = await _fetch(post_url, timeout=12)
