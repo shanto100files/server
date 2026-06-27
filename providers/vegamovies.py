@@ -15,8 +15,14 @@ async def _fetch(url, timeout=12):
     return await async_cf_get(url, headers={"Referer": "https://vegamovies4u.co.in"}, timeout=timeout)
 
 async def _dle_search(domain, query, timeout=12):
-    """DLE CMS search via POST form submission"""
-    body = f"do=search&subaction=search&story={query}"
+    """DLE CMS search — try GET first, fallback to POST"""
+    from urllib.parse import quote_plus
+    # DLE also supports GET search
+    html = await async_cf_get(f"{domain}/index.php?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
+    if html and "post-item" in html:
+        return html
+    # Fallback: POST form submission
+    body = f"do=search&subaction=search&story={quote_plus(query)}"
     resp = await async_cf_post(domain + "/", data=body, headers={
         "Referer": domain + "/",
         "Content-Type": "application/x-www-form-urlencoded",
@@ -99,13 +105,13 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
     soup = BeautifulSoup(html, "html.parser")
     post_url = None
     qw = set(title.lower().split())
-    # Find search result entries
-    for article in soup.find_all(["article", "div", "h2", "h3"], class_=re.compile(r"post|entry|item|result", re.I)):
+    # Find search result entries — DLE uses article.post-item with h3.entry-title > a
+    for article in soup.find_all("article", class_=re.compile(r"post-item", re.I)):
         a_tag = article.find("a", href=True)
         if not a_tag:
             continue
         href = a_tag["href"]
-        post_title = a_tag.get_text(strip=True)
+        post_title = a_tag.get_text(strip=True) or a_tag.get("title", "")
         if not href.startswith("http"):
             href = domain + href
         pt_lower = post_title.lower()
@@ -120,11 +126,33 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
             continue
         post_url = href
         break
+    # Fallback: try h3.entry-title > a
+    if not post_url:
+        for h3 in soup.find_all("h3", class_=re.compile(r"entry-title|post-title", re.I)):
+            a_tag = h3.find("a", href=True)
+            if not a_tag:
+                continue
+            href = a_tag["href"]
+            post_title = a_tag.get_text(strip=True) or a_tag.get("title", "")
+            if not href.startswith("http"):
+                href = domain + href
+            pt_lower = post_title.lower()
+            tw = set(pt_lower.split())
+            overlap = qw & tw
+            if not overlap:
+                continue
+            precision = len(overlap) / len(qw) if qw else 0
+            if precision < 0.5:
+                continue
+            if year and year not in post_title:
+                continue
+            post_url = href
+            break
     # Fallback: try any <a> with href ending in .html
     if not post_url:
         for a_tag in soup.find_all("a", href=True):
             href = a_tag["href"]
-            post_title = a_tag.get_text(strip=True)
+            post_title = a_tag.get_text(strip=True) or a_tag.get("title", "")
             if not href.endswith(".html"):
                 continue
             if not href.startswith("http"):
@@ -154,11 +182,54 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
         t = a.get_text(strip=True)
         if not h or "#" in h or not h.startswith("http"):
             continue
-        if "nexdrive" not in h:
+        # Direct download links (fast-dl.one)
+        if "fast-dl.one" in h:
+            if h in seen:
+                continue
+            seen.add(h)
+            combined = t + " " + unquote(h)
+            quality = "HD"
+            for q in ["2160p", "4K", "1080p", "720p", "480p"]:
+                if q.lower() in combined.lower():
+                    quality = q
+                    break
+            # Try to detect quality from link text
+            if quality == "HD" and t:
+                tl = t.lower()
+                if "1080" in tl:
+                    quality = "1080p"
+                elif "720" in tl:
+                    quality = "720p"
+                elif "480" in tl:
+                    quality = "480p"
+                elif "2160" in tl or "4k" in tl:
+                    quality = "4K"
+            fmt = "mkv" if ".mkv" in h else "mp4"
+            final.append({"url": h, "quality": quality, "provider": "VegaMovies", "format": fmt})
+            continue
+        # Link protector pages (vgmlinks, nexdrive, hubcloud, etc.)
+        if not any(x in h for x in ["nexdrive", "vgmlinks", "hubcloud", "vcloud"]):
             continue
         nex_html = await _fetch(h, timeout=10)
         if not nex_html:
             continue
+        # Try to find fast-dl.one link in protector page
+        fast_match = re.search(r'href="(https?://fast-dl\.one/dl/[^"]+)"', nex_html)
+        if fast_match:
+            dl_url = fast_match.group(1)
+            if dl_url in seen:
+                continue
+            seen.add(dl_url)
+            combined = t + " " + unquote(dl_url)
+            quality = "HD"
+            for q in ["2160p", "4K", "1080p", "720p", "480p"]:
+                if q.lower() in combined.lower():
+                    quality = q
+                    break
+            fmt = "mkv" if ".mkv" in dl_url else "mp4"
+            final.append({"url": dl_url, "quality": quality, "provider": "VegaMovies", "format": fmt})
+            continue
+        # Fallback: try vcloud/hubcloud resolution
         vcloud_url = None
         for m in re.finditer(r'href="(https?://vcloud\.zip/[^"]*)"', nex_html):
             vcloud_url = m.group(1)
