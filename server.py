@@ -1670,6 +1670,55 @@ async def resolve_fastdl(url: str, quality: str = "HD"):
     mem_cache_set(cache_key, results)
     return {"sources": results, "gdflix_url": gdflix_url}
 
+@app.get("/test-cf")
+async def test_cloudscraper():
+    """Diagnostic: check if cloudscraper is installed and test CF bypass"""
+    from client import _HAS_CLOUDSCRAPER, _cloudscraper_get
+    result = {"cloudscraper_installed": _HAS_CLOUDSCRAPER}
+    if _HAS_CLOUDSCRAPER:
+        try:
+            page = _cloudscraper_get("https://httpbin.org/get", timeout=10)
+            result["test_status"] = "ok" if page and "headers" in page else "failed"
+        except Exception as e:
+            result["test_status"] = f"error: {str(e)[:100]}"
+    return result
+
+@app.get("/test-gdflix")
+async def test_gdflix(url: str):
+    """Diagnostic: test GDFlix resolution with cloudscraper"""
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "providers"))
+    from auto_resolver import _fetch_cf, _fetch_cffi, _extract_download_links
+    from curl_cffi import requests as cffi_requests
+
+    result = {"url": url}
+    # Try cf_get (has cloudscraper fallback)
+    html = _fetch_cf(url, timeout=15)
+    result["cf_get_length"] = len(html) if html else 0
+    if html:
+        links = _extract_download_links(html)
+        result["cf_get_links"] = links[:10]
+        result["cf_get_snippet"] = html[:500]
+
+    # Try cffi_requests directly (no cloudscraper)
+    final_url, cffi_html = _fetch_cffi(url, timeout=15)
+    result["cffi_length"] = len(cffi_html) if cffi_html else 0
+    result["cffi_final_url"] = final_url
+    result["cffi_snippet"] = (cffi_html or "")[:500]
+
+    # Also try cloudscraper directly
+    try:
+        from client import _HAS_CLOUDSCRAPER, _scraper, _UA
+        if _HAS_CLOUDSCRAPER and _scraper:
+            r = _scraper.get(url, headers={"User-Agent": _UA}, timeout=15)
+            result["cs_status"] = r.status_code
+            result["cs_length"] = len(r.text)
+            result["cs_full"] = r.text[:5000]
+    except Exception as e:
+        result["cs_error"] = str(e)[:200]
+
+    return result
+
 @app.get("/resolve")
 async def resolve_link(url: str, quality: str = "HD"):
     """Universal resolver: any intermediate link → direct streamable link"""

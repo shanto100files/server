@@ -1,12 +1,26 @@
 """
-Shared HTTP client — OPTIMIZED for Koyeb Free Tier.
+Shared HTTP client — OPTIMIZED for HuggingFace Free Tier.
 Faster keepalive, tuned connection pool, exponential backoff.
+Cloudflare bypass: curl_cffi (TLS fingerprint) → cloudscraper (JS challenge) fallback chain.
 """
 import httpx
 import asyncio
 import os
 import random
+import logging
 from curl_cffi import requests as cffi_requests
+
+try:
+    import cloudscraper as _cloudscraper
+    _scraper = _cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": "windows", "mobile": False},
+        interpreter="js2py",
+    )
+    _HAS_CLOUDSCRAPER = True
+except ImportError:
+    _scraper = None
+    _HAS_CLOUDSCRAPER = False
+    logging.warning("cloudscraper not installed — JS challenge bypass unavailable")
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
@@ -39,18 +53,10 @@ def _load_proxies():
 _load_proxies()
 
 def _fetch_free_proxies():
-    try:
-        r = httpx.get("https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt", timeout=10)
-        if r.status_code == 200:
-            lines = r.text.split("\n")[:100] # Take top 100
-            with open(_proxy_file, "w") as f:
-                f.write("\n".join(lines))
-            _load_proxies()
-    except:
-        pass
+    pass
 
 # Run proxy fetch in background once
-threading.Thread(target=_fetch_free_proxies, daemon=True).start()
+# threading.Thread(target=_fetch_free_proxies, daemon=True).start()
 
 _IMPERSONATES = ["chrome110", "chrome116", "chrome120", "edge101", "safari15_3"]
 
@@ -59,7 +65,7 @@ _domain_async_sessions = {}
 _session_lock = threading.Lock()
 
 def _get_proxy():
-    return random.choice(_PROXIES) if _PROXIES else None
+    return None
 
 def _get_sync_session(url: str):
     domain = urlparse(url).netloc
@@ -96,20 +102,107 @@ def http_post(url: str, content: str = "", headers: dict = None, timeout: int = 
         pass
     return None
 
+def _cloudscraper_get(url: str, headers: dict = None, timeout: int = 15) -> str | None:
+    """Fallback: solve JS challenge via cloudscraper (no browser)."""
+    if not _HAS_CLOUDSCRAPER or _scraper is None:
+        return None
+    try:
+        h = {"User-Agent": _UA}
+        if headers:
+            h.update(headers)
+        r = _scraper.get(url, headers=h, timeout=timeout)
+        if r.status_code == 200:
+            return r.text
+    except Exception as e:
+        logging.debug("cloudscraper failed for %s: %s", url, e)
+    return None
+
+
+def _cf_solve_and_retry(url: str, headers: dict = None, timeout: int = 15) -> str | None:
+    """
+    Try to solve CF challenge via cf_challenge_solver + retry with cookie.
+    Chain: detect challenge → get/solve cookie → retry with cookie.
+    """
+    try:
+        from providers.cf_challenge_solver import (
+            _is_cf_challenge, get_cached_cookie, solve_challenge, should_skip_cf_solve,
+        )
+    except ImportError:
+        try:
+            from cf_challenge_solver import (
+                _is_cf_challenge, get_cached_cookie, solve_challenge, should_skip_cf_solve,
+            )
+        except ImportError:
+            return None
+
+    if should_skip_cf_solve(url):
+        return None
+
+    h = {"User-Agent": _UA}
+    if headers:
+        h.update(headers)
+
+    # Try curl_cffi first to get the challenge page
+    try:
+        r = _get_sync_session(url).get(url, headers=h, timeout=timeout)
+        if r.status_code == 200:
+            return r.text
+        if r.status_code != 403:
+            return None
+        html = r.text
+    except Exception:
+        return None
+
+    if not _is_cf_challenge(html):
+        return None
+
+    # Check cache first
+    cached = get_cached_cookie(url)
+    if cached:
+        cookie_str, cached_ua = cached
+        retry_headers = {**h, "Cookie": cookie_str}
+        try:
+            session = cffi_requests.Session(impersonate=random.choice(_IMPERSONATES))
+            r2 = session.get(url, headers=retry_headers, timeout=timeout)
+            if r2.status_code == 200:
+                return r2.text
+            # Cached cookie expired — invalidate
+            from providers.cf_challenge_solver import invalidate_cookie
+            invalidate_cookie(url)
+        except Exception:
+            pass
+
+    # Try to solve the challenge
+    cookie_str, meta = solve_challenge(url, html, _UA)
+    if cookie_str:
+        retry_headers = {**h, "Cookie": cookie_str}
+        try:
+            session = cffi_requests.Session(impersonate=random.choice(_IMPERSONATES))
+            r3 = session.get(url, headers=retry_headers, timeout=timeout)
+            if r3.status_code == 200:
+                return r3.text
+        except Exception:
+            pass
+
+    return None
+
+
 def cf_get(url: str, headers: dict = None, timeout: int = 10, retries: int = 3) -> str | None:
+    """Try curl_cffi → cf_solver → cloudscraper fallback chain."""
+    h = {"User-Agent": _UA}
+    if headers:
+        h.update(headers)
+
     for attempt in range(retries):
         try:
-            h = {"User-Agent": _UA}
-            if headers:
-                h.update(headers)
             r = _get_sync_session(url).get(url, headers=h, timeout=timeout)
-            if r.status_code in (200, 404):
-                if r.status_code == 200:
-                    return r.text
+            if r.status_code == 200:
+                return r.text
+            if r.status_code == 404:
                 return None
-            
+
             if r.status_code in (403, 429):
-                with _session_lock: # Reset session on ban
+                with _session_lock:
                     domain = urlparse(url).netloc
                     _domain_sync_sessions.pop(domain, None)
                 if attempt < retries - 1:
@@ -120,7 +213,14 @@ def cf_get(url: str, headers: dict = None, timeout: int = 10, retries: int = 3) 
                 _domain_sync_sessions.pop(domain, None)
             if attempt < retries - 1:
                 time.sleep(1.0 * (attempt + 1))
-    return None
+
+    # curl_cffi exhausted → try CF challenge solver (detect + cache cookie + retry)
+    solved = _cf_solve_and_retry(url, headers=h, timeout=timeout + 5)
+    if solved:
+        return solved
+
+    # CF solver couldn't handle → try cloudscraper JS challenge bypass
+    return _cloudscraper_get(url, headers=h, timeout=timeout + 5)
 
 def cf_post(url: str, data: str = "", headers: dict = None, timeout: int = 10, retries: int = 2) -> httpx.Response | None:
     for attempt in range(retries):
@@ -144,15 +244,17 @@ def cf_post(url: str, data: str = "", headers: dict = None, timeout: int = 10, r
     return None
 
 async def async_cf_get(url: str, headers: dict = None, timeout: int = 10, retries: int = 3) -> str | None:
+    """Async: try curl_cffi → cf_solver → cloudscraper (via thread pool) fallback chain."""
+    h = {"User-Agent": _UA}
+    if headers:
+        h.update(headers)
+
     for attempt in range(retries):
         try:
-            h = {"User-Agent": _UA}
-            if headers:
-                h.update(headers)
             r = await _get_async_session(url).get(url, headers=h, timeout=timeout)
-            if r.status_code in (200, 404):
-                if r.status_code == 200:
-                    return r.text
+            if r.status_code == 200:
+                return r.text
+            if r.status_code == 404:
                 return None
 
             if r.status_code in (403, 429):
@@ -167,7 +269,14 @@ async def async_cf_get(url: str, headers: dict = None, timeout: int = 10, retrie
                 _domain_async_sessions.pop(domain, None)
             if attempt < retries - 1:
                 await asyncio.sleep(1.0 * (attempt + 1))
-    return None
+
+    # curl_cffi exhausted → try CF solver (sync via thread pool)
+    solved = await asyncio.to_thread(_cf_solve_and_retry, url, h, timeout + 5)
+    if solved:
+        return solved
+
+    # CF solver couldn't handle → try cloudscraper (sync via thread pool)
+    return await asyncio.to_thread(_cloudscraper_get, url, h, timeout + 5)
 
 async def async_cf_post(url: str, data: str = "", headers: dict = None, timeout: int = 10, retries: int = 2):
     for attempt in range(retries):
