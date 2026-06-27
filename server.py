@@ -720,6 +720,26 @@ async def link_cache_stats():
     from link_indexer import cache_stats as link_stats
     return await link_stats()
 
+@app.get("/admin/link-cache/entries")
+async def link_cache_entries():
+    import aiosqlite as _aiosqlite
+    from link_indexer import DB_PATH as _DB_PATH
+    entries = []
+    async with _aiosqlite.connect(_DB_PATH) as db:
+        async with db.execute("SELECT key, links, provider, created_at FROM link_cache ORDER BY created_at DESC") as row:
+            async for key, links_json, provider, created_at in row:
+                import time as _time
+                age_min = round((_time.time() - created_at) / 60, 1)
+                links = __import__('json').loads(links_json)
+                entries.append({
+                    "key": key,
+                    "provider": provider,
+                    "age_minutes": age_min,
+                    "links_count": len(links),
+                    "links": links,
+                })
+    return {"entries": entries, "count": len(entries)}
+
 @app.get("/admin/domains")
 async def domain_status():
     return get_all_status()
