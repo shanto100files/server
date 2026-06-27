@@ -715,6 +715,23 @@ function getPoster(t){return'';}
 async def health():
     return {"status": "ok", "server": "CinePix Termux", "version": "3.1"}
 
+@app.get("/admin/debug/vegamovies")
+async def debug_vegamovies(q: str = "RRR"):
+    from providers.vegamovies import _dle_search, _get_domain
+    from client import async_cf_get
+    domain = await _get_domain()
+    result = {"domain": domain}
+    html = await _dle_search(domain, q, timeout=15)
+    if not html:
+        result["search"] = "EMPTY"
+    else:
+        result["search_length"] = len(html)
+        result["has_post_item"] = "post-item" in html
+        result["has_entry_title"] = "entry-title" in html
+        result["has_cf_challenge"] = "Just a moment" in html or "challenge-platform" in html
+        result["snippet"] = html[:500] if html else ""
+    return result
+
 @app.get("/admin/link-cache")
 async def link_cache_stats():
     from link_indexer import cache_stats as link_stats

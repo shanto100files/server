@@ -17,10 +17,14 @@ async def _fetch(url, timeout=12):
 async def _dle_search(domain, query, timeout=12):
     """DLE CMS search — try GET first, fallback to POST"""
     from urllib.parse import quote_plus
-    # DLE also supports GET search
-    html = await async_cf_get(f"{domain}/index.php?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
-    if html and "post-item" in html:
+    # DLE supports GET search at /?do=search&subaction=search&story=QUERY
+    html = await async_cf_get(f"{domain}/?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
+    if html and ("post-item" in html or "entry-title" in html):
         return html
+    # Fallback: try index.php path
+    html2 = await async_cf_get(f"{domain}/index.php?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
+    if html2 and ("post-item" in html2 or "entry-title" in html2):
+        return html2
     # Fallback: POST form submission
     body = f"do=search&subaction=search&story={quote_plus(query)}"
     resp = await async_cf_post(domain + "/", data=body, headers={
