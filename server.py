@@ -732,11 +732,24 @@ async def debug_vegamovies(q: str = "RRR"):
             post_html = await _fetch(url, timeout=12)
             if post_html:
                 result["post_length"] = len(post_html)
-                fast = [a["href"] for a in BeautifulSoup(post_html, "html.parser").find_all("a", href=True) if "fast-dl.one" in a["href"]]
-                prot = [a["href"][:80] for a in BeautifulSoup(post_html, "html.parser").find_all("a", href=True) if any(x in a["href"] for x in ["vgmlinks", "nexdrive", "hubcloud", "vcloud"])]
+                psoup = BeautifulSoup(post_html, "html.parser")
+                fast = [a["href"] for a in psoup.find_all("a", href=True) if "fast-dl.one" in a["href"]]
+                prot = [a["href"] for a in psoup.find_all("a", href=True) if any(x in a["href"] for x in ["vgmlinks", "nexdrive", "hubcloud", "vcloud"])]
                 result["fast_dl_count"] = len(fast)
                 result["protector_count"] = len(prot)
-                result["sample_hrefs"] = [a["href"][:80] for a in BeautifulSoup(post_html, "html.parser").find_all("a", href=True) if a["href"].startswith("http")][:10]
+                result["protector_urls"] = [u[:100] for u in prot[:3]]
+                # Check what's inside the first protector
+                if prot:
+                    ph2 = await _fetch(prot[0], timeout=10)
+                    if ph2:
+                        result["protector_page_len"] = len(ph2)
+                        result["protector_has_fastdl"] = "fast-dl" in ph2
+                        fast2 = re.findall(r'href="(https?://fast-dl[^"]+)"', ph2)
+                        result["protector_fastdl_links"] = [u[:100] for u in fast2[:3]]
+                        vcloud2 = re.findall(r'href="(https?://[^"]*(?:vcloud|hubcloud)[^"]*)"', ph2)
+                        result["protector_vcloud_links"] = [u[:100] for u in vcloud2[:3]]
+                    else:
+                        result["protector_page"] = "EMPTY"
             else:
                 result["post_fetch"] = "EMPTY"
             break
