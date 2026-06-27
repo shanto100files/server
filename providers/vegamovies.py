@@ -15,25 +15,37 @@ async def _fetch(url, timeout=12):
     return await async_cf_get(url, headers={"Referer": "https://vegamovies4u.co.in"}, timeout=timeout)
 
 async def _dle_search(domain, query, timeout=12):
-    """DLE CMS search — try GET first, fallback to POST"""
+    """VegaMovies search — handle both Typesense (WordPress) and DLE CMS sites"""
     from urllib.parse import quote_plus
-    # DLE supports GET search at /?do=search&subaction=search&story=QUERY
-    html = await async_cf_get(f"{domain}/?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
-    if html and ("post-item" in html or "entry-title" in html):
-        return html
-    # Fallback: try index.php path
-    html2 = await async_cf_get(f"{domain}/index.php?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
+    # Try Typesense JSON API first (vegamovies.navy / WordPress sites)
+    html = await async_cf_get(f"{domain}/search.php?q={quote_plus(query)}&page=1", timeout=timeout)
+    if html:
+        try:
+            data = json.loads(html)
+            hits = data.get("hits", [])
+            if hits:
+                return {"type": "typesense", "data": data, "domain": domain}
+        except (json.JSONDecodeError, KeyError):
+            pass
+    # Try DLE CMS GET search (vegamovies4u.co.in sites)
+    html2 = await async_cf_get(f"{domain}/?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
     if html2 and ("post-item" in html2 or "entry-title" in html2):
-        return html2
+        return {"type": "dle", "data": html2, "domain": domain}
+    # Try DLE CMS GET search via index.php
+    html3 = await async_cf_get(f"{domain}/index.php?do=search&subaction=search&story={quote_plus(query)}", timeout=timeout)
+    if html3 and ("post-item" in html3 or "entry-title" in html3):
+        return {"type": "dle", "data": html3, "domain": domain}
     # Fallback: POST form submission
     body = f"do=search&subaction=search&story={quote_plus(query)}"
     resp = await async_cf_post(domain + "/", data=body, headers={
         "Referer": domain + "/",
         "Content-Type": "application/x-www-form-urlencoded",
     }, timeout=timeout)
-    if not resp:
-        return None
-    return resp.text if hasattr(resp, 'text') else resp
+    if resp:
+        text = resp.text if hasattr(resp, 'text') else resp
+        if text and ("post-item" in text or "entry-title" in text):
+            return {"type": "dle", "data": text, "domain": domain}
+    return None
 
 async def _get_domain():
     global _DOMAIN_CACHE
@@ -101,45 +113,48 @@ async def _resolve_vcloud(url):
 
 async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
     domain = await _get_domain()
-    # DLE CMS search via POST
-    html = await _dle_search(domain, title, timeout=12)
-    if not html:
+    search_result = await _dle_search(domain, title, timeout=12)
+    if not search_result:
         return []
-    # Parse DLE search results HTML
-    soup = BeautifulSoup(html, "html.parser")
+    
     post_url = None
-    qw = set(title.lower().split())
-    # Find search result entries — DLE uses article.post-item with h3.entry-title > a
-    for article in soup.find_all("article", class_=re.compile(r"post-item", re.I)):
-        a_tag = article.find("a", href=True)
-        if not a_tag:
-            continue
-        href = a_tag["href"]
-        post_title = a_tag.get_text(strip=True) or a_tag.get("title", "")
-        if not href.startswith("http"):
-            href = domain + href
-        pt_lower = post_title.lower()
-        tw = set(pt_lower.split())
-        overlap = qw & tw
-        if not overlap:
-            continue
-        precision = len(overlap) / len(qw) if qw else 0
-        if precision < 0.5:
-            continue
-        if year and year not in post_title:
-            continue
-        post_url = href
-        break
-    # Fallback: try h3.entry-title > a
-    if not post_url:
-        for h3 in soup.find_all("h3", class_=re.compile(r"entry-title|post-title", re.I)):
-            a_tag = h3.find("a", href=True)
+    search_type = search_result["type"]
+    search_data = search_result["data"]
+    base_domain = search_result["domain"]
+    
+    if search_type == "typesense":
+        hits = search_data.get("hits", [])
+        qw = set(title.lower().split())
+        for hit in hits:
+            doc = hit.get("document", {})
+            permalink = doc.get("permalink", "")
+            post_title = doc.get("post_title", "")
+            if not permalink:
+                continue
+            pt_lower = post_title.lower()
+            tw = set(pt_lower.split())
+            overlap = qw & tw
+            if not overlap:
+                continue
+            precision = len(overlap) / len(qw) if qw else 0
+            if precision < 0.5:
+                continue
+            if year and year not in post_title:
+                continue
+            post_url = permalink if permalink.startswith("http") else base_domain + permalink
+            break
+    elif search_type == "dle":
+        soup = BeautifulSoup(search_data, "html.parser")
+        qw = set(title.lower().split())
+        # Try article.post-item first
+        for article in soup.find_all("article", class_=re.compile(r"post-item", re.I)):
+            a_tag = article.find("a", href=True)
             if not a_tag:
                 continue
             href = a_tag["href"]
             post_title = a_tag.get_text(strip=True) or a_tag.get("title", "")
             if not href.startswith("http"):
-                href = domain + href
+                href = base_domain + href
             pt_lower = post_title.lower()
             tw = set(pt_lower.split())
             overlap = qw & tw
@@ -152,27 +167,50 @@ async def vegamovies(title, tmdb_id="", season=0, episode=0, year="", media_type
                 continue
             post_url = href
             break
-    # Fallback: try any <a> with href ending in .html
-    if not post_url:
-        for a_tag in soup.find_all("a", href=True):
-            href = a_tag["href"]
-            post_title = a_tag.get_text(strip=True) or a_tag.get("title", "")
-            if not href.endswith(".html"):
-                continue
-            if not href.startswith("http"):
-                href = domain + href
-            pt_lower = post_title.lower()
-            tw = set(pt_lower.split())
-            overlap = qw & tw
-            if not overlap:
-                continue
-            precision = len(overlap) / len(qw) if qw else 0
-            if precision < 0.5:
-                continue
-            if year and year not in post_title:
-                continue
-            post_url = href
-            break
+        # Fallback: try h3.entry-title > a
+        if not post_url:
+            for h3 in soup.find_all("h3", class_=re.compile(r"entry-title|post-title", re.I)):
+                a_tag = h3.find("a", href=True)
+                if not a_tag:
+                    continue
+                href = a_tag["href"]
+                post_title = a_tag.get_text(strip=True) or a_tag.get("title", "")
+                if not href.startswith("http"):
+                    href = base_domain + href
+                pt_lower = post_title.lower()
+                tw = set(pt_lower.split())
+                overlap = qw & tw
+                if not overlap:
+                    continue
+                precision = len(overlap) / len(qw) if qw else 0
+                if precision < 0.5:
+                    continue
+                if year and year not in post_title:
+                    continue
+                post_url = href
+                break
+        # Fallback: try any <a> with href ending in .html
+        if not post_url:
+            for a_tag in soup.find_all("a", href=True):
+                href = a_tag["href"]
+                post_title = a_tag.get_text(strip=True) or a_tag.get("title", "")
+                if not href.endswith(".html"):
+                    continue
+                if not href.startswith("http"):
+                    href = base_domain + href
+                pt_lower = post_title.lower()
+                tw = set(pt_lower.split())
+                overlap = qw & tw
+                if not overlap:
+                    continue
+                precision = len(overlap) / len(qw) if qw else 0
+                if precision < 0.5:
+                    continue
+                if year and year not in post_title:
+                    continue
+                post_url = href
+                break
+    
     if not post_url:
         return []
     post_html = await _fetch(post_url, timeout=12)
