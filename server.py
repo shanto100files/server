@@ -1305,6 +1305,10 @@ async def tv_season(tmdb_id: str, season: int):
     episodes = await get_tv_season(int(tmdb_id), season)
     return {"episodes": episodes, "count": len(episodes)}
 
+@app.api_route("/v1/tv/{tmdb_id}/season/{season}/stream", methods=["GET"])
+async def tv_season_stream(tmdb_id: str, season: int, title: str = "", request: Request = None):
+    return await sources_stream(tmdb_id=tmdb_id, type="tv", title=title, season=season, episode=0, year="", request=request)
+
 import re as _re_lang
 
 _LANG_MAP = {
