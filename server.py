@@ -1621,7 +1621,9 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
                     return name, []
     
             future_map = {}
-            for name, func, args in tasks:
+            for i, (name, func, args) in enumerate(tasks):
+                if i > 0 and not enough:
+                    await asyncio.sleep(0.5)
                 fut = asyncio.ensure_future(run_one(name, func, args))
                 future_map[fut] = name
                 chunk = f"data: {_json.dumps({'type': 'provider_start', 'name': name})}\n\n"
