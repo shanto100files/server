@@ -27,6 +27,7 @@ def is_direct_streamable(url: str) -> bool:
         "dl.flycors.dev", "fastdlserver.site", "linksmod.top",
         "pixeldrain.dev", "filepress.click", "fsleech.com",
         "drivebot.club", "gdflix.lol", "hubcloud.ink",
+        "fast-dl.one",
     ]
     url_lower = url.lower()
     if any(url_lower.endswith(ext) or ext + "?" in url_lower for ext in SKIP):
@@ -375,6 +376,39 @@ def resolve_any(url: str, quality: str = "HD", referer: str = "") -> list[dict]:
                 fmt = "mkv" if ".mkv" in link else "mp4"
                 results.append({"url": link, "quality": quality, "provider": "DriveBot", "format": fmt})
             return results
+
+    if "fast-dl.one" in host:
+        results = []
+        seen = set()
+        final_url, html = _fetch_cffi(url, timeout=12)
+        if final_url != url and is_direct_streamable(final_url):
+            fmt = "mkv" if ".mkv" in final_url else "mp4"
+            return [{"url": final_url, "quality": quality, "provider": "FastDL", "format": fmt}]
+        if html:
+            for link in _extract_download_links(html):
+                if link not in seen:
+                    seen.add(link)
+                    fmt = "mkv" if ".mkv" in link else "mp4"
+                    results.append({"url": link, "quality": quality, "provider": "FastDL", "format": fmt})
+            if results:
+                return results
+            gdflix_links = re.findall(r'href="(https?://[^"]*gdflix[^"]*)"', html)
+            for gl in gdflix_links:
+                g_resolved = resolve_gdflix_auto(gl, quality=quality, referer=url)
+                for g in g_resolved:
+                    if g["url"] not in seen:
+                        seen.add(g["url"])
+                        results.append(g)
+            if results:
+                return results
+            hubcloud_links = re.findall(r'href="(https?://[^"]*hubcloud[^"]*)"', html)
+            for hl in hubcloud_links:
+                h_resolved = resolve_hubcloud_auto(hl, quality=quality)
+                for h in h_resolved:
+                    if h["url"] not in seen:
+                        seen.add(h["url"])
+                        results.append(h)
+        return results
 
     if "fastdlserver" in host:
         results = []

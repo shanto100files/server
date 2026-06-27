@@ -99,11 +99,60 @@ async def _search_sitemap(title: str) -> str | None:
     return None
 
 
+async def _search_direct(title: str) -> str | None:
+    """Fallback: scrape search page when sitemap doesn't have the movie."""
+    for domain in HDHUB4U_DOMAINS:
+        try:
+            from urllib.parse import quote
+            html = await async_cf_get(f"{domain}/?s={quote(title)}", timeout=10)
+            if not html or len(html) < 500:
+                continue
+            soup = BeautifulSoup(html, "html.parser")
+            qw = set(title.lower().split())
+            for a in soup.select("a[href]"):
+                href = a.get("href", "")
+                text = a.get_text(strip=True).lower()
+                if not href or "/?s=" in href or href.rstrip("/") == domain:
+                    continue
+                if any(x in href for x in ["/page/", "/tag/", "/category/", "search.html"]):
+                    continue
+                if not href.startswith("http") and not href.startswith("/"):
+                    continue
+                tw = set(text.split())
+                overlap = qw & tw
+                if len(overlap) >= max(1, len(qw) - 1):
+                    if href.startswith("http"):
+                        from urllib.parse import urlparse
+                        parsed = urlparse(href)
+                        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                    return href
+        except Exception:
+            continue
+
+        # Fallback: try searching via google dork
+        try:
+            from urllib.parse import quote
+            g_url = f"https://www.google.com/search?q=site:{domain.split('//')[1]}+{quote(title)}"
+            g_html = await async_cf_get(g_url, timeout=8)
+            if g_html:
+                import re
+                found = re.search(rf'href="(https?://{re.escape(domain.split("//")[1])}/[^"]+)"', g_html)
+                if found:
+                    from urllib.parse import urlparse
+                    parsed = urlparse(found.group(1))
+                    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        except Exception:
+            pass
+    return None
+
+
 async def hdhub4u(title: str, tmdb_id: str = "") -> list[dict]:
     sources = []
     loop = asyncio.get_event_loop()
 
     permalink = await _search_sitemap(title)
+    if not permalink:
+        permalink = await _search_direct(title)
     if not permalink:
         return sources
 

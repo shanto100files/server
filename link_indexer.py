@@ -21,7 +21,8 @@ LINK_TTL = 6 * 3600  # 6 hours — intermediate links expire after this
 INTERMEDIATE_DOMAINS = [
     "gdflix", "hubcloud", "drivebot", "fastdlserver", "linksmod",
     "hubdrive", "direct-dl.lol", "gdxshare", "fxlinks", "techzed",
-    "savelinks", "net52.cc",
+    "savelinks", "net52.cc", "cinecloud", "cinefreak", "new5.cinecloud",
+    "neodrive", "gdflix.to", "new1.gdflix", "fast-dl.one",
 ]
 
 # Domains that are already direct stream links — no need to cache these

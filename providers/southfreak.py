@@ -9,19 +9,18 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.
 
 
 async def _resolve_protector(url: str) -> str:
-    """Resolve direct-dl.lol and similar protector pages to get actual download URL."""
-    if "direct-dl.lol" not in url:
+    """Resolve protector pages (direct-dl.lol, techzed.info, etc.) to get actual download URL."""
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    needs_resolve = "direct-dl.lol" in host or "techzed" in host or "savelinks" in host or "fastdlserver" in host or "linksmod" in host
+    if not needs_resolve:
         return url
     try:
-        html = await async_cf_get(url, timeout=12)
-        if not html:
-            return url
-        m = re.search(r'id=["\']vd["\'][^>]*href=["\']([^"\']+)', html)
-        if m and "googleusercontent" in m.group(1):
-            return m.group(1)
-        m2 = re.search(r'href=["\']([^"\']*googleusercontent[^"\']*)', html)
-        if m2:
-            return m2.group(1)
+        from providers.auto_resolver import resolve_any
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: resolve_any(url, quality="HD"))
+        if result and len(result) > 0:
+            return result[0].get("url", url)
         return url
     except Exception:
         return url
