@@ -12,33 +12,63 @@ from providers.auto_resolver import resolve_any
 CINEFREAK_DOMAINS = ["https://cinefreak.net", "https://cinefreak.nl", "https://cinefreak.site"]
 CINECLOUD_BASE = "https://new5.cinecloud.site"
 
-# Pre-scraped data search
-async def _search_pre_scraped(title: str) -> list[dict]:
-    """Search pre-scraped cinefreak posts in database."""
+def _normalize_title(title: str) -> str:
+    """Normalize title for matching — remove colons, hyphens, extra spaces."""
+    t = title.lower().strip()
+    t = re.sub(r"[:\-\–\—\|\(\)\[\]\{\}\!\?\'\"]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+async def _search_pre_scraped(title: str, year: str = "", media_type: str = "", season: int = 0) -> list[dict]:
+    """Search pre-scraped cinefreak posts in database with year + type filter."""
     try:
         import aiosqlite
         db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache.db")
         results = []
+        normalized = _normalize_title(title)
+        words = normalized.split()
         async with aiosqlite.connect(db_path) as db:
-            search_term = f"%{title.lower()}%"
+            # Build query — match ALL title words (not substring)
+            conditions = []
+            params = []
+            for w in words:
+                if len(w) >= 3:
+                    conditions.append("lower(title) LIKE ?")
+                    params.append(f"%{w}%")
+            if not conditions:
+                return []
+
+            where = " AND ".join(conditions)
+
+            # Year filter
+            if year:
+                where += " AND (year = ? OR year = '')"
+                params.append(year)
+
+            params.append(10)
             async with db.execute(
-                "SELECT url, title, year, language, genre, imdb_rating, quality, cinecloud_links FROM cinefreak_posts WHERE title LIKE ? LIMIT 5",
-                (search_term,)
+                f"SELECT url, title, year, language, genre, imdb_rating, quality, cinecloud_links FROM cinefreak_posts WHERE {where} LIMIT ?",
+                params
             ) as cursor:
                 async for row in cursor:
                     cinecloud_links = json.loads(row[7]) if row[7] else []
-                    if cinecloud_links:
+                    if not cinecloud_links:
+                        continue
+                    # Score: how many words match
+                    db_title = _normalize_title(row[1])
+                    db_words = set(db_title.split())
+                    matched = sum(1 for w in words if w in db_words)
+                    score = matched / len(words) if words else 0
+                    if score >= 0.5:
                         results.append({
-                            "url": row[0],
-                            "title": row[1],
-                            "year": row[2],
-                            "language": row[3],
-                            "genre": row[4],
-                            "imdb_rating": row[5],
-                            "quality": row[6],
-                            "cinecloud_links": cinecloud_links
+                            "url": row[0], "title": row[1], "year": row[2],
+                            "language": row[3], "genre": row[4],
+                            "imdb_rating": row[5], "quality": row[6],
+                            "cinecloud_links": cinecloud_links, "_score": score,
                         })
-        return results
+        results.sort(key=lambda x: x["_score"], reverse=True)
+        return results[:5]
     except Exception as e:
         return []
 
@@ -232,12 +262,12 @@ def _get_card_episode_range(card) -> tuple[int, int]:
             return (s, e)
     return (0, 0)
 
-async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, episode: int = 0) -> list[dict]:
+async def cinefreak(tmdb_id: str, media_type: str, title: str, season: int = 0, episode: int = 0, year: str = "") -> list[dict]:
     sources = []
     
     # STEP 1: Try pre-scraped data first (fast)
     try:
-        pre_scraped = await _search_pre_scraped(title)
+        pre_scraped = await _search_pre_scraped(title, year=year, media_type=media_type, season=season)
         if pre_scraped:
             for post in pre_scraped:
                 resolved = await _resolve_from_pre_scraped(post, season, episode)

@@ -140,6 +140,9 @@ async def startup():
     threading.Thread(target=_preload_sitemaps, daemon=True).start()
     threading.Thread(target=_check_warp_proxy, daemon=True).start()
     threading.Thread(target=_run_cinefreak_scraper, daemon=True).start()
+    threading.Thread(target=_run_mlsbd_scraper, daemon=True).start()
+    threading.Thread(target=_run_hdhub4u_scraper, daemon=True).start()
+    threading.Thread(target=_run_bollyflix_scraper, daemon=True).start()
 
 def _run_cinefreak_scraper():
     """Run CineFreak pre-scraper in background."""
@@ -163,6 +166,48 @@ def _run_cinefreak_scraper():
                 print(f"[CineFreak Scraper] Refresh error: {e}")
     except Exception as e:
         print(f"[CineFreak Scraper] Error: {e}")
+
+def _run_mlsbd_scraper():
+    """Run MLSBD pre-scraper in background."""
+    try:
+        import asyncio as _aio
+        from providers.mlsbd_scraper import run_scraper, init_table
+        loop = _aio.new_event_loop()
+        _aio.set_event_loop(loop)
+        loop.run_until_complete(init_table())
+        loop.run_until_complete(run_scraper(500))
+        print("[MLSBD Scraper] Initial batch done")
+        import time as _time
+        while True:
+            _time.sleep(3600)
+            try:
+                loop.run_until_complete(run_scraper(50))
+                print("[MLSBD Scraper] Hourly refresh done")
+            except Exception as e:
+                print(f"[MLSBD Scraper] Refresh error: {e}")
+    except Exception as e:
+        print(f"[MLSBD Scraper] Error: {e}")
+
+def _run_hdhub4u_scraper():
+    """Run HDHub4U pre-scraper in background."""
+    try:
+        import asyncio as _aio
+        from providers.hdhub4u_scraper import run_scraper, init_table
+        loop = _aio.new_event_loop()
+        _aio.set_event_loop(loop)
+        loop.run_until_complete(init_table())
+        loop.run_until_complete(run_scraper(500))
+        print("[HDHub4U Scraper] Initial batch done")
+        import time as _time
+        while True:
+            _time.sleep(3600)
+            try:
+                loop.run_until_complete(run_scraper(50))
+                print("[HDHub4U Scraper] Hourly refresh done")
+            except Exception as e:
+                print(f"[HDHub4U Scraper] Refresh error: {e}")
+    except Exception as e:
+        print(f"[HDHub4U Scraper] Error: {e}")
 
 def _check_warp_proxy():
     """Check if Cloudflare WARP proxy is running for MLSBD CF bypass."""
@@ -829,12 +874,57 @@ async def trigger_cinefreak_scraper():
     from providers.cinefreak_scraper import get_stats
     if get_stats().get("running"):
         return {"status": "already_running"}
-    threading.Thread(target=lambda: asyncio.run(_run_scraper_now()), daemon=True).start()
+    threading.Thread(target=lambda: asyncio.run(_run_scraper_now("cinefreak")), daemon=True).start()
     return {"status": "started"}
 
-async def _run_scraper_now():
-    from providers.cinefreak_scraper import run_scraper
-    await run_scraper(500)
+@app.get("/admin/mlsbd-scraper")
+async def mlsbd_scraper_status():
+    from providers.mlsbd_scraper import get_stats
+    return get_stats()
+
+@app.post("/admin/mlsbd-scraper/run")
+async def trigger_mlsbd_scraper():
+    from providers.mlsbd_scraper import get_stats
+    if get_stats().get("running"):
+        return {"status": "already_running"}
+    threading.Thread(target=lambda: asyncio.run(_run_scraper_now("mlsbd")), daemon=True).start()
+    return {"status": "started"}
+
+@app.get("/admin/hdhub4u-scraper")
+async def hdhub4u_scraper_status():
+    from providers.hdhub4u_scraper import get_stats
+    return get_stats()
+
+@app.post("/admin/hdhub4u-scraper/run")
+async def trigger_hdhub4u_scraper():
+    from providers.hdhub4u_scraper import get_stats
+    if get_stats().get("running"):
+        return {"status": "already_running"}
+    threading.Thread(target=lambda: asyncio.run(_run_scraper_now("hdhub4u")), daemon=True).start()
+    return {"status": "started"}
+
+@app.get("/admin/all-scrapers")
+async def all_scrapers_status():
+    """Get status of all scrapers."""
+    from providers.cinefreak_scraper import get_stats as cf_stats
+    from providers.mlsbd_scraper import get_stats as ml_stats
+    from providers.hdhub4u_scraper import get_stats as hd_stats
+    return {
+        "cinefreak": cf_stats(),
+        "mlsbd": ml_stats(),
+        "hdhub4u": hd_stats()
+    }
+
+async def _run_scraper_now(scraper_name: str):
+    if scraper_name == "cinefreak":
+        from providers.cinefreak_scraper import run_scraper
+        await run_scraper(500)
+    elif scraper_name == "mlsbd":
+        from providers.mlsbd_scraper import run_scraper
+        await run_scraper(500)
+    elif scraper_name == "hdhub4u":
+        from providers.hdhub4u_scraper import run_scraper
+        await run_scraper(500)
 
 @app.get("/admin/cinefreak-posts")
 async def list_cinefreak_posts():
@@ -854,7 +944,51 @@ async def list_cinefreak_posts():
                     "language": row[3],
                     "quality": row[4],
                     "links_count": len(links),
-                    "links": links  # ← Actual links add korechi
+                    "links": links
+                })
+    return {"total": len(posts), "posts": posts}
+
+@app.get("/admin/mlsbd-posts")
+async def list_mlsbd_posts():
+    """List all scraped MLSBD posts with links."""
+    import aiosqlite
+    import json
+    db_path = os.path.join(os.path.dirname(__file__), "cache.db")
+    posts = []
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT url, title, year, language, quality, savelinks FROM mlsbd_posts ORDER BY last_scraped DESC LIMIT 100") as cursor:
+            async for row in cursor:
+                links = json.loads(row[5]) if row[5] else []
+                posts.append({
+                    "url": row[0],
+                    "title": row[1],
+                    "year": row[2],
+                    "language": row[3],
+                    "quality": row[4],
+                    "links_count": len(links),
+                    "links": links
+                })
+    return {"total": len(posts), "posts": posts}
+
+@app.get("/admin/hdhub4u-posts")
+async def list_hdhub4u_posts():
+    """List all scraped HDHub4U posts with links."""
+    import aiosqlite
+    import json
+    db_path = os.path.join(os.path.dirname(__file__), "cache.db")
+    posts = []
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT url, title, year, language, quality, download_links FROM hdhub4u_posts ORDER BY last_scraped DESC LIMIT 100") as cursor:
+            async for row in cursor:
+                links = json.loads(row[5]) if row[5] else []
+                posts.append({
+                    "url": row[0],
+                    "title": row[1],
+                    "year": row[2],
+                    "language": row[3],
+                    "quality": row[4],
+                    "links_count": len(links),
+                    "links": links
                 })
     return {"total": len(posts), "posts": posts}
 
@@ -995,7 +1129,7 @@ async def monitor_loadtest():
             cached = mem_cache_get(f"api:{cache_key}")
             if cached:
                 return {"title": title, "sources": cached.get("count", 0), "duration": 0.01, "cached": True, "ok": True}
-            tasks_p = [asyncio.ensure_future(asyncio.wait_for(cinefreak(tmdb_id, "movie", title, 0, 0), timeout=15)),
+            tasks_p = [asyncio.ensure_future(asyncio.wait_for(cinefreak(tmdb_id, "movie", title, 0, 0, ""), timeout=15)),
                        asyncio.ensure_future(asyncio.wait_for(hdhub4u(title, tmdb_id), timeout=15))]
             results_p = await asyncio.gather(*tasks_p, return_exceptions=True)
             sources = [s for r in results_p if isinstance(r, list) for s in r]
@@ -1518,11 +1652,11 @@ async def sources(tmdb_id: str, type: str = "movie", title: str = "", season: in
         tasks = [
             ("hdhub4u", hdhub4u, (title, tmdb_id)),
             ("4khdhub", fourkhd, (title, tmdb_id)),
-            ("cinefreak", cinefreak, (tmdb_id, type, title, season, episode)),
+            ("cinefreak", cinefreak, (tmdb_id, type, title, season, episode, year)),
         ]
     else:
         tasks = [
-            ("cinefreak", cinefreak, (tmdb_id, type, title, season, episode)),
+            ("cinefreak", cinefreak, (tmdb_id, type, title, season, episode, year)),
             ("hdhub4u", hdhub4u, (title, tmdb_id)),
             ("mlsbd", mlsbd, (title, tmdb_id)),
             ("southfreak", southfreak, (title, tmdb_id)),
@@ -1673,13 +1807,13 @@ async def sources_stream(tmdb_id: str, type: str = "movie", title: str = "", sea
                 tasks = [
                     ("HDHub4U", hdhub4u, (title, tmdb_id)),
                     ("4KHDHub", fourkhd, (title, tmdb_id)),
-                    ("CineFreak", cinefreak, (tmdb_id, type, title, season, episode)),
+                    ("CineFreak", cinefreak, (tmdb_id, type, title, season, episode, year)),
                 ]
             else:
                 tasks = [
                     ("HDHub4U", hdhub4u, (title, tmdb_id)),
                     ("4KHDHub", fourkhd, (title, tmdb_id)),
-                    ("CineFreak", cinefreak, (tmdb_id, type, title, season, episode)),
+                    ("CineFreak", cinefreak, (tmdb_id, type, title, season, episode, year)),
                     ("MLSBD", mlsbd, (title, tmdb_id, season, episode, year, type)),
                     ("SouthFreak", southfreak, (title, tmdb_id, year, type)),
                     ("BollyFlix", bollyflix, (title, tmdb_id, year, type)),
