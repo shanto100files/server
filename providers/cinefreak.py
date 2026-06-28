@@ -48,12 +48,12 @@ async def _search_pre_scraped(title: str, year: str = "", media_type: str = "", 
 
             params.append(10)
             async with db.execute(
-                f"SELECT url, title, year, language, genre, imdb_rating, quality, cinecloud_links FROM cinefreak_posts WHERE {where} LIMIT ?",
+                f"SELECT url, title, year, language, genre, imdb_rating, quality, base64_ids FROM cinefreak_posts WHERE {where} LIMIT ?",
                 params
             ) as cursor:
                 async for row in cursor:
-                    cinecloud_links = json.loads(row[7]) if row[7] else []
-                    if not cinecloud_links:
+                    base64_ids = json.loads(row[7]) if row[7] else []
+                    if not base64_ids:
                         continue
                     # Score: how many words match
                     db_title = _normalize_title(row[1])
@@ -65,7 +65,7 @@ async def _search_pre_scraped(title: str, year: str = "", media_type: str = "", 
                             "url": row[0], "title": row[1], "year": row[2],
                             "language": row[3], "genre": row[4],
                             "imdb_rating": row[5], "quality": row[6],
-                            "cinecloud_links": cinecloud_links, "_score": score,
+                            "base64_ids": base64_ids, "_score": score,
                         })
         results.sort(key=lambda x: x["_score"], reverse=True)
         return results[:5]
@@ -73,16 +73,15 @@ async def _search_pre_scraped(title: str, year: str = "", media_type: str = "", 
         return []
 
 async def _resolve_from_pre_scraped(post: dict, season: int = 0, episode: int = 0) -> list[dict]:
-    """Resolve cinecloud links from pre-scraped data."""
+    """Resolve cinecloud links from pre-scraped data using base64 IDs."""
     sources = []
-    cinecloud_links = post.get("cinecloud_links", [])
+    base64_ids = post.get("base64_ids", [])
     
-    # Filter by quality if needed
-    for link in cinecloud_links:
-        url = link.get("url", "")
-        quality = link.get("quality", "HD")
-        link_type = link.get("type", "download")
-        
+    # Decode base64 IDs with domain mapping
+    from providers.cinefreak_scraper import decode_cinecloud_url
+    
+    for b64_id in base64_ids:
+        url = decode_cinecloud_url(b64_id)
         if not url:
             continue
         
@@ -92,7 +91,7 @@ async def _resolve_from_pre_scraped(post: dict, season: int = 0, episode: int = 
             for dl in dl_links:
                 sources.append({
                     "url": dl,
-                    "quality": meta.get("quality", quality),
+                    "quality": meta.get("quality", post.get("quality", "HD")),
                     "provider": "CineFreak",
                     "format": meta.get("format", "mp4"),
                     "fileSize": meta.get("fileSize", ""),
@@ -103,7 +102,7 @@ async def _resolve_from_pre_scraped(post: dict, season: int = 0, episode: int = 
             # If resolution fails, add the intermediate link
             sources.append({
                 "url": url,
-                "quality": quality,
+                "quality": post.get("quality", "HD"),
                 "provider": "CineFreak",
                 "format": "mp4",
             })

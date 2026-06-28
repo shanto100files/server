@@ -90,6 +90,22 @@ async def _resolve_hubcloud(hub_url):
     return results
 
 async def fourkhd(title, tmdb_id="", season=0, episode=0, year="", media_type=""):
+    # Check pre-scraped data first
+    from providers.hdhub4k_scraper import search_pre_scraped
+    pre_scraped = await search_pre_scraped(title)
+    if pre_scraped:
+        results = []
+        for post in pre_scraped[:3]:
+            for link in post.get("download_links", []):
+                results.append({
+                    "url": link["url"],
+                    "quality": "HD",
+                    "provider": "4KHDHub",
+                    "source": "pre-scraped"
+                })
+        if results:
+            return results
+
     domain = await _get_domain()
     qw = set(title.lower().split())
     post_url = None

@@ -143,6 +143,7 @@ async def startup():
     threading.Thread(target=_run_mlsbd_scraper, daemon=True).start()
     threading.Thread(target=_run_hdhub4u_scraper, daemon=True).start()
     threading.Thread(target=_run_bollyflix_scraper, daemon=True).start()
+    threading.Thread(target=_run_hdhub4k_scraper, daemon=True).start()
 
 def _run_cinefreak_scraper():
     """Run CineFreak pre-scraper in background."""
@@ -208,6 +209,48 @@ def _run_hdhub4u_scraper():
                 print(f"[HDHub4U Scraper] Refresh error: {e}")
     except Exception as e:
         print(f"[HDHub4U Scraper] Error: {e}")
+
+def _run_bollyflix_scraper():
+    """Run BollyFlix pre-scraper in background."""
+    try:
+        import asyncio as _aio
+        from providers.bollyflix_scraper import run_scraper, init_table
+        loop = _aio.new_event_loop()
+        _aio.set_event_loop(loop)
+        loop.run_until_complete(init_table())
+        loop.run_until_complete(run_scraper(500))
+        print("[BollyFlix Scraper] Initial batch done")
+        import time as _time
+        while True:
+            _time.sleep(3600)
+            try:
+                loop.run_until_complete(run_scraper(50))
+                print("[BollyFlix Scraper] Hourly refresh done")
+            except Exception as e:
+                print(f"[BollyFlix Scraper] Refresh error: {e}")
+    except Exception as e:
+        print(f"[BollyFlix Scraper] Error: {e}")
+
+def _run_hdhub4k_scraper():
+    """Run 4KHDHub pre-scraper in background."""
+    try:
+        import asyncio as _aio
+        from providers.hdhub4k_scraper import run_scraper, init_table
+        loop = _aio.new_event_loop()
+        _aio.set_event_loop(loop)
+        loop.run_until_complete(init_table())
+        loop.run_until_complete(run_scraper(500))
+        print("[4KHDHub Scraper] Initial batch done")
+        import time as _time
+        while True:
+            _time.sleep(3600)
+            try:
+                loop.run_until_complete(run_scraper(50))
+                print("[4KHDHub Scraper] Hourly refresh done")
+            except Exception as e:
+                print(f"[4KHDHub Scraper] Refresh error: {e}")
+    except Exception as e:
+        print(f"[4KHDHub Scraper] Error: {e}")
 
 def _check_warp_proxy():
     """Check if Cloudflare WARP proxy is running for MLSBD CF bypass."""
@@ -866,8 +909,25 @@ async def trigger_health_check():
 
 @app.get("/admin/cinefreak-scraper")
 async def cinefreak_scraper_status():
-    from providers.cinefreak_scraper import get_stats
-    return get_stats()
+    from providers.cinefreak_scraper import get_stats, DOMAIN_MAP
+    stats = get_stats()
+    stats["domain_map"] = DOMAIN_MAP
+    return stats
+
+@app.post("/admin/cinefreak-scraper/update-domain")
+async def update_cinecloud_domain(request: Request):
+    """Update cinecloud domain mapping."""
+    body = await request.json()
+    old_domain = body.get("old_domain", "")
+    new_domain = body.get("new_domain", "")
+    
+    if not old_domain or not new_domain:
+        return {"error": "old_domain and new_domain required"}
+    
+    from providers.cinefreak_scraper import DOMAIN_MAP
+    DOMAIN_MAP[old_domain] = new_domain
+    
+    return {"status": "updated", "domain_map": DOMAIN_MAP}
 
 @app.post("/admin/cinefreak-scraper/run")
 async def trigger_cinefreak_scraper():
@@ -903,16 +963,46 @@ async def trigger_hdhub4u_scraper():
     threading.Thread(target=lambda: asyncio.run(_run_scraper_now("hdhub4u")), daemon=True).start()
     return {"status": "started"}
 
+@app.get("/admin/bollyflix-scraper")
+async def bollyflix_scraper_status():
+    from providers.bollyflix_scraper import get_stats
+    return get_stats()
+
+@app.post("/admin/bollyflix-scraper/run")
+async def trigger_bollyflix_scraper():
+    from providers.bollyflix_scraper import get_stats
+    if get_stats().get("running"):
+        return {"status": "already_running"}
+    threading.Thread(target=lambda: asyncio.run(_run_scraper_now("bollyflix")), daemon=True).start()
+    return {"status": "started"}
+
+@app.get("/admin/hdhub4k-scraper")
+async def hdhub4k_scraper_status():
+    from providers.hdhub4k_scraper import get_stats
+    return get_stats()
+
+@app.post("/admin/hdhub4k-scraper/run")
+async def trigger_hdhub4k_scraper():
+    from providers.hdhub4k_scraper import get_stats
+    if get_stats().get("running"):
+        return {"status": "already_running"}
+    threading.Thread(target=lambda: asyncio.run(_run_scraper_now("hdhub4k")), daemon=True).start()
+    return {"status": "started"}
+
 @app.get("/admin/all-scrapers")
 async def all_scrapers_status():
     """Get status of all scrapers."""
     from providers.cinefreak_scraper import get_stats as cf_stats
     from providers.mlsbd_scraper import get_stats as ml_stats
     from providers.hdhub4u_scraper import get_stats as hd_stats
+    from providers.bollyflix_scraper import get_stats as bf_stats
+    from providers.hdhub4k_scraper import get_stats as h4k_stats
     return {
         "cinefreak": cf_stats(),
         "mlsbd": ml_stats(),
-        "hdhub4u": hd_stats()
+        "hdhub4u": hd_stats(),
+        "bollyflix": bf_stats(),
+        "hdhub4k": h4k_stats()
     }
 
 async def _run_scraper_now(scraper_name: str):
@@ -925,50 +1015,65 @@ async def _run_scraper_now(scraper_name: str):
     elif scraper_name == "hdhub4u":
         from providers.hdhub4u_scraper import run_scraper
         await run_scraper(500)
+    elif scraper_name == "bollyflix":
+        from providers.bollyflix_scraper import run_scraper
+        await run_scraper(500)
+    elif scraper_name == "hdhub4k":
+        from providers.hdhub4k_scraper import run_scraper
+        await run_scraper(500)
 
 @app.get("/admin/cinefreak-posts")
 async def list_cinefreak_posts():
-    """List all scraped cinefreak posts with links."""
+    """List all scraped cinefreak posts with base64 IDs."""
     import aiosqlite
     import json
     db_path = os.path.join(os.path.dirname(__file__), "cache.db")
     posts = []
     async with aiosqlite.connect(db_path) as db:
-        async with db.execute("SELECT url, title, year, language, quality, cinecloud_links FROM cinefreak_posts ORDER BY last_scraped DESC LIMIT 100") as cursor:
+        async with db.execute("SELECT url, title, year, language, quality, base64_ids FROM cinefreak_posts ORDER BY last_scraped DESC LIMIT 100") as cursor:
             async for row in cursor:
-                links = json.loads(row[5]) if row[5] else []
+                base64_ids = json.loads(row[5]) if row[5] else []
                 posts.append({
                     "url": row[0],
                     "title": row[1],
                     "year": row[2],
                     "language": row[3],
                     "quality": row[4],
-                    "links_count": len(links),
-                    "links": links
+                    "links_count": len(base64_ids),
+                    "base64_ids": base64_ids
                 })
     return {"total": len(posts), "posts": posts}
 
 @app.get("/admin/mlsbd-posts")
 async def list_mlsbd_posts():
-    """List all scraped MLSBD posts with links."""
+    """List all scraped MLSBD posts with metadata and savelinks."""
     import aiosqlite
     import json
     db_path = os.path.join(os.path.dirname(__file__), "cache.db")
     posts = []
     async with aiosqlite.connect(db_path) as db:
-        async with db.execute("SELECT url, title, year, language, quality, savelinks FROM mlsbd_posts ORDER BY last_scraped DESC LIMIT 100") as cursor:
+        async with db.execute("SELECT url, title, year, language, quality, resolution, size, savelinks_ids FROM mlsbd_posts ORDER BY last_scraped DESC LIMIT 100") as cursor:
             async for row in cursor:
-                links = json.loads(row[5]) if row[5] else []
+                savelinks_ids = json.loads(row[7]) if row[7] else []
                 posts.append({
                     "url": row[0],
                     "title": row[1],
                     "year": row[2],
                     "language": row[3],
                     "quality": row[4],
-                    "links_count": len(links),
-                    "links": links
+                    "resolution": row[5],
+                    "size": row[6],
+                    "savelinks_count": len(savelinks_ids),
+                    "savelinks_ids": savelinks_ids
                 })
     return {"total": len(posts), "posts": posts}
+
+@app.get("/admin/savelinks/{savelink_id}")
+async def resolve_savelink(savelink_id: str):
+    """Resolve savelinks.me ID to get GDFlix/HubCloud links."""
+    from providers.mlsbd_scraper import resolve_savelink
+    links = await resolve_savelink(savelink_id)
+    return {"savelink_id": savelink_id, "links": links}
 
 @app.get("/admin/hdhub4u-posts")
 async def list_hdhub4u_posts():
@@ -979,6 +1084,28 @@ async def list_hdhub4u_posts():
     posts = []
     async with aiosqlite.connect(db_path) as db:
         async with db.execute("SELECT url, title, year, language, quality, download_links FROM hdhub4u_posts ORDER BY last_scraped DESC LIMIT 100") as cursor:
+            async for row in cursor:
+                links = json.loads(row[5]) if row[5] else []
+                posts.append({
+                    "url": row[0],
+                    "title": row[1],
+                    "year": row[2],
+                    "language": row[3],
+                    "quality": row[4],
+                    "links_count": len(links),
+                    "links": links
+                })
+    return {"total": len(posts), "posts": posts}
+
+@app.get("/admin/bollyflix-posts")
+async def list_bollyflix_posts():
+    """List all scraped BollyFlix posts with links."""
+    import aiosqlite
+    import json
+    db_path = os.path.join(os.path.dirname(__file__), "cache.db")
+    posts = []
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT url, title, year, language, quality, download_links FROM bollyflix_posts ORDER BY last_scraped DESC LIMIT 100") as cursor:
             async for row in cursor:
                 links = json.loads(row[5]) if row[5] else []
                 posts.append({

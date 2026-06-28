@@ -1,7 +1,6 @@
 """
-CineFreak Pre-Scraper
-Background scraper that stores cinefreak posts + cinecloud links to SQLite.
-Runs on server startup and periodically refreshes.
+CineFreak Pre-Scraper (Hybrid Approach)
+Stores base64 IDs, decodes on request with domain mapping.
 """
 import re
 import base64
@@ -16,7 +15,12 @@ DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache.db")
 SITEMAP_URL = "https://cinefreak.net/post-sitemap.xml"
 CINECLOUD_BASE = "https://new5.cinecloud.site"
 
-# Stats
+# DOMAIN MAPPING - Update here if cinecloud domain changes!
+DOMAIN_MAP = {
+    "new5.cinecloud.site": "new5.cinecloud.site",  # ← Change here if domain changes
+    # "new5.cinecloud.site": "new6.cinecloud.site",  # Example: uncomment if changed
+}
+
 _stats = {"scraped": 0, "links": 0, "failed": 0, "last_run": None, "running": False}
 
 async def init_pre_scrape_table():
@@ -31,7 +35,7 @@ async def init_pre_scrape_table():
                 genre TEXT,
                 imdb_rating TEXT,
                 quality TEXT,
-                cinecloud_links TEXT,
+                base64_ids TEXT,
                 last_scraped REAL
             )
         """)
@@ -50,15 +54,15 @@ async def get_scraped_urls():
                 urls.add(row[0])
         return urls
 
-async def save_post(url, title, year, language, genre, imdb_rating, quality, cinecloud_links):
+async def save_post(url, title, year, language, genre, imdb_rating, quality, base64_ids):
     """Save a scraped post to database."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             INSERT OR REPLACE INTO cinefreak_posts 
-            (url, title, year, language, genre, imdb_rating, quality, cinecloud_links, last_scraped)
+            (url, title, year, language, genre, imdb_rating, quality, base64_ids, last_scraped)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (url, title, year, language, genre, imdb_rating, quality, 
-              json.dumps(cinecloud_links), time.time()))
+              json.dumps(base64_ids), time.time()))
         await db.commit()
 
 async def fetch_html(url):
@@ -129,8 +133,8 @@ def extract_metadata(html):
     return title, year, language, genre, imdb_rating, quality
 
 def extract_cinecloud_links(html):
-    """Extract cinecloud links from HTML (base64 encoded in generate.php)."""
-    links = []
+    """Extract base64 IDs from HTML for cinecloud links."""
+    base64_ids = []
     
     # Find generate.php links
     gen_links = re.findall(r'href=["\']([^"\']*generate\.php\?id=[^"\']+)["\']', html)
@@ -141,35 +145,14 @@ def extract_cinecloud_links(html):
             try:
                 decoded = base64.b64decode(m.group(1)).decode()
                 if "cinecloud" in decoded.lower():
-                    # Get quality/size from surrounding text
-                    quality = ""
-                    size = ""
-                    
-                    # Find the button text near this link
-                    btn_pattern = rf'generate\.php\?id={re.escape(m.group(1))}[^"]*"[^>]*>([^<]*)<'
-                    btn_match = re.search(btn_pattern, html)
-                    if btn_match:
-                        btn_text = btn_match.group(1)
-                        q = re.search(r'(480p|720p|1080p|2160p|4K)', btn_text)
-                        if q:
-                            quality = q.group(1)
-                    
-                    # Find size in nearby text
-                    size_pattern = r'\[([\d.]+ [GMK]B)\]'
-                    size_matches = re.findall(size_pattern, html)
-                    if size_matches:
-                        size = size_matches[0] if size_matches else ""
-                    
-                    links.append({
-                        "url": decoded,
-                        "quality": quality,
-                        "size": size,
-                        "type": "download" if "/f/" in decoded else "watch"
-                    })
+                    # Store base64 ID (not full URL)
+                    base64_id = m.group(1)
+                    if base64_id not in base64_ids:
+                        base64_ids.append(base64_id)
             except:
                 pass
     
-    return links
+    return base64_ids
 
 async def scrape_post(url):
     """Scrape a single post and return data."""
@@ -182,14 +165,14 @@ async def scrape_post(url):
             return None
         
         title, year, language, genre, imdb_rating, quality = extract_metadata(html)
-        cinecloud_links = extract_cinecloud_links(html)
+        base64_ids = extract_cinecloud_links(html)
         
         if not title:
             _stats["failed"] += 1
             return None
         
         _stats["scraped"] += 1
-        _stats["links"] += len(cinecloud_links)
+        _stats["links"] += len(base64_ids)
         
         return {
             "url": url,
@@ -199,7 +182,7 @@ async def scrape_post(url):
             "genre": genre,
             "imdb_rating": imdb_rating,
             "quality": quality,
-            "cinecloud_links": cinecloud_links
+            "base64_ids": base64_ids
         }
         
     except Exception as e:
@@ -253,7 +236,7 @@ async def run_scraper(max_posts=100):
                 await save_post(
                     result["url"], result["title"], result["year"],
                     result["language"], result["genre"], result["imdb_rating"],
-                    result["quality"], result["cinecloud_links"]
+                    result["quality"], result["base64_ids"]
                 )
             await asyncio.sleep(0.5)  # Rate limit
             return result
@@ -293,9 +276,34 @@ async def search_pre_scraped(query):
                     "genre": row[4],
                     "imdb_rating": row[5],
                     "quality": row[6],
-                    "cinecloud_links": json.loads(row[7]) if row[7] else []
+                    "base64_ids": json.loads(row[7]) if row[7] else []
                 })
         return results
+
+def decode_cinecloud_url(base64_id):
+    """Decode base64 ID to cinecloud URL with domain mapping."""
+    try:
+        decoded = base64.b64decode(base64_id).decode()
+        # Apply domain mapping
+        for old_domain, new_domain in DOMAIN_MAP.items():
+            decoded = decoded.replace(old_domain, new_domain)
+        return decoded
+    except:
+        return None
+
+def get_all_base64_ids():
+    """Get all base64 IDs from database for batch decode."""
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT base64_ids FROM cinefreak_posts")
+    all_ids = []
+    for row in cursor.fetchall():
+        if row[0]:
+            ids = json.loads(row[0])
+            all_ids.extend(ids)
+    conn.close()
+    return list(set(all_ids))
 
 # For running standalone
 if __name__ == "__main__":
